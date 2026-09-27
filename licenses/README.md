@@ -18,7 +18,7 @@ No game data.
 | psyqo / nugget (PS1 SDK) | PCSX-Redux authors | MIT — [psyqo-nugget-MIT.txt](psyqo-nugget-MIT.txt) |
 | EASTL, EABase (C++ containers, via psyqo) | Electronic Arts | BSD 3-Clause — [EASTL-BSD-3-Clause.txt](EASTL-BSD-3-Clause.txt), [EABase-BSD-3-Clause.txt](EABase-BSD-3-Clause.txt) |
 | SPU / CD-ROM driver model (ps1-bare-metal) | spicyjpeg | MIT — [ps1-bare-metal-MIT.txt](ps1-bare-metal-MIT.txt) |
-| Loading icon and memory card icon | TODO (credit to be given) | credited to its author |
+| Loading icon and memory card icon | fan-made pixel art, author unknown (contact us for credit) | credited to its author |
 
 ## External tools (installed by you, not included)
 

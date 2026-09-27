@@ -25,8 +25,8 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 ## Usage
 
-1. Get `Data.rsdk` from your copy of **Sonic the Hedgehog 2 (2013)** for Android or iOS (unmodified; the builder checks
-   its SHA-256). TODO(user): how to get it from the installed game.
+1. Copy `Data.rsdk` from your own installation of **Sonic the Hedgehog 2 (2013)** for Android or iOS (unmodified; the
+   builder checks its SHA-256).
 2. Install the [requirements](#requirements).
 3. Run:
    ```bash
@@ -156,7 +156,7 @@ instruction by instruction):
   **[psxavenc](https://codeberg.org/WonderfulToolchain/psxavenc)**: Ben "GreaseMonkey" Russell and Adrian "asie"
   Siekierka.
 - **[psx-spx](https://psx-spx.consoledev.net/)** hardware documentation: Martin "nocash" Korth and contributors.
-- **Loading icon and memory card icon**: TODO(user): credit.
+- **Loading icon and memory card icon**: fan-made pixel art, author unknown (contact us for credit).
 
 Licensed under the RSDKv3/v4 decompilation license ([LICENSE.md](LICENSE.md)). **Not for commercial use. No game assets
 are distributed** — you build the disc from your own copy of the game. Third-party licenses are in
