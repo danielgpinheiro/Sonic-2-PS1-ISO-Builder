@@ -1,0 +1,12 @@
+# The natural build's boot, files in the order it opens them (GDB trace of fopen, 2026-09-27): input of
+# tools/disc/gen_load_order.py (docs/30 phase 7.3 / 9). OPEN lines only are read.
+OPEN settings.ini
+OPEN UData.bin
+OPEN Data/Game/PS1Scene3D.bin
+OPEN Data/Game/GameConfig.bin
+OPEN Data/Game/PS1SfxResident.bin
+OPEN Data/Music/Music.bin
+OPEN Data/Game/GameConfig.bin
+OPEN Data/Game/Menu/PS1Fonts.pmn
+OPEN Data/Game/Menu/PS1Menu.pmn
+OPEN Data/Game/PS1SfxMenu.bin
