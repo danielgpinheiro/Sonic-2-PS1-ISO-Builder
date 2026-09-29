@@ -232,6 +232,34 @@ def merge(rects):
     return [tuple(r) for r in rects]
 
 
+def colour_split(im, frames):
+    """A merged rect with more than 15 colours whose frames each have 15 or fewer (docs/37: Sonic 1's Scrap Brain with
+    Sonic & Tails): regroup its frames greedily, biggest first, into rects whose whole region keeps 15 colours or
+    fewer, so each can be a 4-bit cluster instead of the one 8-bit cluster (half the VRAM per texel). Groups may overlap:
+    the runtime draws a frame from whichever cluster holds each of its texels (render.cpp PS1ForEachPieceAtlas), and
+    every cluster stores its region verbatim, so the result is exact (the self-check decodes every frame back)."""
+    region = lambda r: set(np.unique(im[r[1]:r[1] + r[3], r[0]:r[0] + r[2]]).tolist()) - {0}
+    union = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]),
+                          max(a[0] + a[2], b[0] + b[2]) - min(a[0], b[0]), max(a[1] + a[3], b[1] + b[3]) - min(a[1], b[1]))
+    groups = []  # [rect, colours]
+    for f in sorted(frames, key=lambda r: (-r[2] * r[3], r)):
+        best = None
+        for g in groups:
+            u = union(g[0], f)
+            if u[2] > PAGE or u[3] > PAGE:
+                continue
+            cols = region(u)
+            if len(cols) <= 15:
+                grow = u[2] * u[3] - g[0][2] * g[0][3]
+                if best is None or grow < best[0]:
+                    best = (grow, g, u, cols)
+        if best:
+            best[1][0], best[1][1] = best[2], best[3]
+        else:
+            groups.append([f, region(f)])
+    return [tuple(g[0]) for g in groups]
+
+
 def split(r):
     x, y, w, h = r
     return [(x + i, y + j, min(PAGE, w - i), min(PAGE, h - j)) for j in range(0, h, PAGE) for i in range(0, w, PAGE)]
@@ -266,9 +294,11 @@ def last_tile(data, stage):
     return max(used) if used else -1
 
 
-def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
+def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0, split4=False):
     """virtual > 0 (feasibility): that many extra 64-halfword columns beyond real VRAM, per page row.
-    stream > 0: the `stream` largest merged rects become on-demand pictures (<Stage>.pic)."""
+    stream > 0: the `stream` largest merged rects become on-demand pictures (<Stage>.pic).
+    split4: merged rects over 15 colours whose frames all fit 15 are regrouped into 4-bit clusters (colour_split); the
+    fallback for a stage that doesn't fit, before on-demand pictures (atlases that fit are left as they were)."""
     images = {}
     frames = manifest_frames(data, manifest, images)
     video = False
@@ -285,7 +315,13 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
                 rects.append((x0, y0, x1 - x0, y1 - y0))
         for r in merge(rects):
             merged.append((r[2] * r[3], sheet, r))
-            for piece in split(r):
+            parts = [r]
+            if split4 and len(set(np.unique(im[r[1]:r[1] + r[3], r[0]:r[0] + r[2]]).tolist()) - {0}) > 15:
+                inside = [f for f in rects if f[0] >= r[0] and f[1] >= r[1] and f[0] + f[2] <= r[0] + r[2] and
+                          f[1] + f[3] <= r[1] + r[3]]
+                if all(len(set(np.unique(im[f[1]:f[1] + f[3], f[0]:f[0] + f[2]]).tolist()) - {0}) <= 15 for f in inside):
+                    parts = colour_split(im, inside)
+            for piece in [q for p_ in parts for q in split(p_)]:
                 x, y, w, h = piece
                 cols = set(np.unique(im[y:y + h, x:x + w]).tolist()) - {0}
                 clusters.append(dict(sheet=sheet, rect=piece, colors=cols, depth=4 if len(cols) <= 15 else 8,
@@ -552,9 +588,17 @@ def main():
         try:
             blob, report, _, _, pic = build_stage(data, os.path.join(mdir, f), name, cols)
         except AtlasError as e:
-            # Doesn't fit: stream the fewest largest frame groups as on-demand pictures.
+            # Doesn't fit: first 8-bit groups of 4-bit frames as 4-bit clusters (colour_split, exact), then stream the
+            # fewest largest frame groups as on-demand pictures.
             err, blob = e, None
+            try:
+                blob, report, _, _, pic = build_stage(data, os.path.join(mdir, f), name, cols, split4=True)
+                report += ' | 4-bit split'
+            except AtlasError as e2:
+                err = e2
             for k in range(1, 17):
+                if blob is not None:
+                    break
                 try:
                     blob, report, _, _, pic = build_stage(data, os.path.join(mdir, f), name, cols, stream=k)
                     break

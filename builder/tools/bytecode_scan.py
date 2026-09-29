@@ -28,7 +28,8 @@ def preprocess(lines, rev):
     """Keep the lines whose `#if` conditions hold for revision `rev` (the macros Script.cpp's tables use)."""
     macros = {'RETRO_REV00': rev == 0, 'RETRO_REV01': rev >= 1, 'RETRO_REV02': rev >= 2, 'RETRO_REV03': rev >= 3,
               'RETRO_USE_HAPTICS': False, 'RETRO_USE_COMPILER': True, 'RETRO_USE_ORIGINAL_CODE': False,
-              'RETRO_USE_MOD_LOADER': False}
+              'RETRO_USE_MOD_LOADER': False,
+              'PS1_GAME': 1}  # Sonic 1's opcodes (docs/37) come after Sonic 2's: listing them keeps Sonic 2's numbers
 
     def ev(expr):
         e = expr.strip()

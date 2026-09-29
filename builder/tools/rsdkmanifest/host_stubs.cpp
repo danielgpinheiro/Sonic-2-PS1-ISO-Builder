@@ -7,6 +7,8 @@
 #include "RetroEngine.hpp"
 
 int AddDebugHitbox(byte type, Entity *entity, int left, int top, int right, int bottom) { return {}; }
+CollisionSensor sensors[RETRO_REV00 ? 6 : 7]; // Sonic 1's natives read / write these (Script.cpp)
+byte showHitboxes = false;
 void AddTextMenuEntry(TextMenu *menu, const char *text) {}
 void BoxCollision(Entity *thisEntity, int thisLeft, int thisTop, int thisRight, int thisBottom, Entity *otherEntity, int otherLeft, int otherTop,
                   int otherRight, int otherBottom) {}

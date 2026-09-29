@@ -85,14 +85,16 @@ def copy_tree(src, dst, excludes):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Convert the Sonic 2 data for the PS1 disc (docs/30).')
+    ap = argparse.ArgumentParser(description='Convert the Sonic 2 (docs/30) or Sonic 1 (docs/37) data for the PS1 disc.')
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument('--rsdk', help='the Android / iOS Data.rsdk')
     g.add_argument('--src', help='an extracted tree (Data/ + Bytecode/)')
     ap.add_argument('--out', default=REPO, help='where build/iso and build/manifest go (default: the repo)')
     ap.add_argument('--order', help='the load order file to write (default: tools/disc/load_order.txt)')
     ap.add_argument('--disc-tools', action='store_true', help='also require mkpsxiso (the disc step that follows)')
+    ap.add_argument('--game', choices=('1', '2'), default='2', help='2 = Sonic 2 (default), 1 = Sonic 1 (docs/37)')
     a = ap.parse_args()
+    s1 = a.game == '1'
     tools = check_tools(a.disc_tools)
     env = dict(os.environ, **tools)
     out = os.path.abspath(a.out)
@@ -102,30 +104,34 @@ def main():
     src = os.path.abspath(a.src) if a.src else os.path.join(out, 'build', 'extracted')
     if a.rsdk:
         shutil.rmtree(src, ignore_errors=True)
-        run('1 data', [PY, os.path.join(HERE, 'extract_rsdk.py'), os.path.abspath(a.rsdk), src], env=env)
+        lst = os.path.join(HERE, 'rsdkv4_filelist_s1.txt' if s1 else 'rsdkv4_filelist.txt')
+        run('1 data', [PY, os.path.join(HERE, 'extract_rsdk.py'), os.path.abspath(a.rsdk), src, '--list', lst], env=env)
     sdata, sbc = os.path.join(src, 'Data'), os.path.join(src, 'Bytecode')
     shutil.rmtree(iso, ignore_errors=True)
     print('[1 data] copy the data the console reads -> %s' % os.path.relpath(iso, REPO), flush=True)
     copy_tree(sdata, data, ['*.gif', '*.wav', '*.ogg', '.DS_Store', 'Game/Menu/', 'Game/Models/', 'Stages/ZoneM/'])
     copy_tree(sbc, os.path.join(iso, 'Bytecode'), ['ZoneM.bin', '.DS_Store'])
     bc = os.path.join(iso, 'Bytecode')
-    run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_bytecode.py'), bc], env=env)
+    run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_bytecode.py'), bc, '--game', a.game], env=env)
     run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'scene3d_stages.py'), bc, data], env=env)
 
-    run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + tools['CXX']], env=env)
+    run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + tools['CXX'], 'GAME=' + a.game],
+        env=env)
+    manifest_tool = os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest-s1' if s1 else 'rsdkmanifest')
     shutil.rmtree(mdir, ignore_errors=True)
     os.makedirs(mdir)
     for suffix, player in VARIANTS:
         pdir = os.path.join(mdir, 'p%d' % player)
-        run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, pdir, str(player)],
+        run('2 manifest', [manifest_tool, iso, pdir, str(player)],
             log=os.path.join(mdir, 'p%d.log' % player), env=env)
         run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), sdata, pdir, '--suffix', suffix,
                         '--out', os.path.join(data, 'Sprites', 'Atlas')], log=os.path.join(mdir, 'atlas%s.log' % suffix), env=env)
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), sdata, data], env=env)
-    run('5 strips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data], log=os.path.join(mdir, 'bgstrips.log'), env=env)
-    run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data], env=env)
+    run('5 strips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data] + (['--game', '1'] if s1 else []),
+        log=os.path.join(mdir, 'bgstrips.log'), env=env)  # Sonic 1: BGS3 (segment maps, 4-bit rows; docs/37 phase 3)
+    run('6 menus', [PY, os.path.join(HERE, 'menu', 'build_menu.py'), sdata, data] + (['--game', '1'] if s1 else []), env=env)
     run('7 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), sdata, data, sbc], env=env)
-    run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc], env=env)
+    run('8 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), sdata, data, sbc] + (['--game', '1'] if s1 else []), env=env)
 
     # the console reads 128x128Tiles.ps1 / CollisionMasks.ps1 (written by rsdkmanifest with the engine's own loaders)
     for st in sorted(os.listdir(os.path.join(data, 'Stages'))):
@@ -135,8 +141,9 @@ def main():
                 os.remove(os.path.join(d, orig))
     run('9 layout', [PY, os.path.join(HERE, 'disc', 'stage_local.py'), iso, mdir], env=env)
     order = [PY, os.path.join(HERE, 'disc', 'gen_load_order.py'), iso]
-    if a.order:
-        order += [os.path.join(HERE, 'disc', 'boot_trace.txt'), os.path.abspath(a.order)]
+    if a.order or s1:  # Sonic 1: its own boot trace and order file (the Makefile's disc / dist read it for GAME=1)
+        order += [os.path.join(HERE, 'disc', 'boot_trace_s1.txt' if s1 else 'boot_trace.txt'),
+                  os.path.abspath(a.order) if a.order else os.path.join(HERE, 'disc', 'load_order_s1.txt')]
     run('9 layout', order, env=env)
     n = sum(len(f) for _, _, f in os.walk(iso))
     size = sum(os.path.getsize(os.path.join(r, x)) for r, _, fs in os.walk(iso) for x in fs)

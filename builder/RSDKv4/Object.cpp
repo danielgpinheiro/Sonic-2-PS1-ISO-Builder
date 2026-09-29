@@ -91,6 +91,9 @@ static void PS1BuildTypeGroups()
 }
 // The same lists from a candidate slot list (ascending; ProcessObjects' flagged slots): each list gets the same
 // entities in the same order as the full walk, which only ever finds flagged slots.
+#if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
+bool PS1S1TopSub(int ptr); // Script.cpp: a sub that is one native opcode, run without ProcessScript
+#endif
 static void PS1BuildTypeGroupsFrom(const short *cand, int n)
 {
     static short s_active[ENTITY_COUNT];
@@ -249,6 +252,9 @@ void ProcessObjects()
             uint32_t ps1T0  = PS1ProfTicks();
 #endif
             if (scriptCode[scriptInfo->eventUpdate.scriptCodePtr] > 0) {
+#if PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
+                if (!PS1S1TopSub(scriptInfo->eventUpdate.scriptCodePtr)) // one native opcode: no ProcessScript (Script.cpp)
+#endif
                 ProcessScript(scriptInfo->eventUpdate.scriptCodePtr, scriptInfo->eventUpdate.jumpTablePtr, EVENT_MAIN);
                 bounds();
             }

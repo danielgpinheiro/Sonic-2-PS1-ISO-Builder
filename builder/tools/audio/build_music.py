@@ -67,16 +67,23 @@ def silent_sector(channel, coding):
 NATIVE_LOOPS = {'mainmenu.ogg': 106596, 'menuintro.ogg': 0}
 
 
-def loop_points(bcdir):
+def loop_points(bcdir, full=False):
     """{path under Data/Music (lower case): loop point (44.1 kHz samples, 0 = from the start)} from every
-    SetMusicTrack / SwapMusicTrack with constant operands in the v4 bytecode, and the native menus'."""
+    SetMusicTrack / SwapMusicTrack with constant operands in the v4 bytecode, and the native menus'.
+    full (Sonic 1, docs/37 phase 5): also the stage files' own subs and functions, whose pointers follow GlobalCode's
+    code (the speed shoes' _F tracks are set there); a track given two loop points keeps the first (sorted file order)."""
     funcs, vars_ = bs.tables(3)
     names = [f[0] for f in funcs]
     ops_music = {names.index('SetMusicTrack'), names.index('SwapMusicTrack')}
     out = dict(NATIVE_LOOPS)
     for path in sorted(glob.glob(os.path.join(bcdir, '*.bin'))):
-        code, _, subs, _, fns, _ = bs.load(path)
-        starts = sorted({x for t in subs for x in t if 0 <= x < len(code)} | {c for c, _ in fns if 0 <= c < len(code)})
+        if full:
+            code, _, subs, _, fns, _ = bs.full_code(path)
+            base = len(code) - len(bs.load(path)[0])
+        else:
+            code, _, subs, _, fns, _ = bs.load(path)
+            base = 0
+        starts = sorted({x for t in subs for x in t if base <= x < len(code)} | {c for c, _ in fns if base <= c < len(code)})
         for x in starts:
             try:
                 ins = bs.walk(code, x, funcs, len(vars_))
@@ -86,7 +93,7 @@ def loop_points(bcdir):
                 if names.index(n) in ops_music and ops[0][0] == 'str' and ops[2][0] == 'int':
                     loop = ops[2][1] if ops[2][1] > 1 else 0
                     prev = out.setdefault(ops[0][1].lower(), loop)
-                    if prev != loop:
+                    if prev != loop and not full:
                         sys.exit('ERROR: %s has two loop points (%d, %d)' % (ops[0][1], prev, loop))
     return out
 
@@ -116,10 +123,11 @@ def encode(src, loop44, tmp, channel):
 
 def main():
     src_data, out_data, bcdir = sys.argv[1], sys.argv[2], sys.argv[3]
+    s1 = '--game' in sys.argv and sys.argv[sys.argv.index('--game') + 1] == '1'  # docs/37: every file's code scanned
     root = os.path.join(src_data, 'Music')
     out_root = os.path.join(out_data, 'Music')
     os.makedirs(out_root, exist_ok=True)
-    loops = loop_points(bcdir)
+    loops = loop_points(bcdir, full=s1)
     tracks = sorted(os.path.relpath(p, root).replace(os.sep, '/') for p in glob.glob(os.path.join(root, '**', '*.ogg'), recursive=True))
     missing = [t for t in tracks if t.lower() not in loops]
     enc = {}

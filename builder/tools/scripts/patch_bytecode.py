@@ -37,7 +37,8 @@ natively, leaving the same temps and table / local writes behind.
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected stops the
 build. Already patched files are recognised and left alone.
 
-Usage: patch_bytecode.py BYTECODE_DIR   (the disc tree's Bytecode/, e.g. build/iso/Bytecode)
+Usage: patch_bytecode.py BYTECODE_DIR [--game 1|2]   (the disc tree's Bytecode/, e.g. build/iso/Bytecode;
+       --game 1: Sonic 1's list, docs/37 -- default 2, Sonic 2's)
 """
 import os, struct, sys
 
@@ -2257,11 +2258,12 @@ def returns_balanced(bcdir):
     return None
 
 
-def patch_back_pause(bcdir):
+def patch_back_pause(bcdir, s1=False):
     """The mobile back key (INPUT_B held) pauses the game in the player's input function (GlobalCode function 0)
     and the special stage's (Special.bin): `IfEqual KEYDOWNBUTTONB 1` -> `... 2` (never true: a key is 0 or 1). On
     the PS1 pad B is Circle, a jump button as Cross and Square (ProcessObjectControl: A || B || C); Start still pauses
-    (user decision 2026-09-26). Found by the pattern (the If, then the GLOBAL[13] check and `Equal ENGINESTATE 5`)."""
+    (user decision 2026-09-26). Found by the pattern (the If, then the GLOBAL[13] check and `Equal ENGINESTATE 5`;
+    s1: Sonic 1's, no 2P check: the If, `PlaySfx 23 0`, then `Equal ENGINESTATE 5`)."""
     names, vars_ = bs.tables(3)
     glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
     done, already = [], []
@@ -2286,8 +2288,9 @@ def patch_back_pause(bcdir):
             for k, l in enumerate(L):
                 w = l.split()
                 if len(w) == 4 and w[0] == 'IfEqual' and w[2] == 'KEYDOWNBUTTONB' and w[3] in ('1', '2') and \
-                        L[k + 1].startswith('IfEqual ') and L[k + 1].endswith(' GLOBAL[1,0,13] 0') and \
-                        'Equal ENGINESTATE 5' in L[k + 2:k + 6]:
+                        (s1 and L[k + 1] == 'PlaySfx 23 0' and 'Equal ENGINESTATE 5' in L[k + 2:k + 5] or
+                         not s1 and L[k + 1].startswith('IfEqual ') and L[k + 1].endswith(' GLOBAL[1,0,13] 0') and
+                         'Equal ENGINESTATE 5' in L[k + 2:k + 6]):
                     sites.add((ins[k][2][2][2], w[3]))
         for pos, v in sorted(sites):
             if v == '2':
@@ -2315,9 +2318,11 @@ PS1_TEMPENTITY_START = 0x380 - 0x80
 # forward from their own slot. Title Card (the stage pauses when a title card is placed), Special Setup, Bridge End
 # (Zone01, Zone08), Breakable Wall (Zone08), Spikes Activator (Zone07), Belt Activation (Zone09).
 ENTITY_BOUND_SITES = {'GlobalCode': 1, 'Special': 1, 'Zone01': 1, 'Zone07': 1, 'Zone08': 2, 'Zone09': 1}
+# Sonic 1 (docs/37): its own scans (the special stage's 707 placed blocks end at slot 738, inside the PS1's 768)
+ENTITY_BOUND_SITES_S1 = {'GlobalCode': 2, 'Special': 7, 'Zone01': 1, 'Zone03': 1, 'Zone04': 2, 'Zone05': 1, 'Zone06': 1}
 
 
-def patch_entity_layout(bcdir):
+def patch_entity_layout(bcdir, expected=None):
     """`WLower / IfGreaterOrEqual ARRAYPOSn 1056` -> 768: the end of the stage slots in the PS1 layout. Upstream's
     scans stop before the temp slots; on the PS1 they would reach them, and during an object's startup the running
     entity (ProcessStartupObjects: slot TEMPENTITY_START, type = the object) is there: the Title Card's startup found
@@ -2358,16 +2363,18 @@ def patch_entity_layout(bcdir):
     # A patched tree has no 1056 bound left (768 also occurs as a genuine bound: Special Setup sorts slots 32-767).
     if not done:
         return 'stage-slot bounds already %d' % PS1_TEMPENTITY_START
-    if done != {k: v for k, v in ENTITY_BOUND_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
-        sys.exit('ERROR patch_bytecode: entity bound sites %s, expected %s' % (done, ENTITY_BOUND_SITES))
+    expected = expected or ENTITY_BOUND_SITES
+    if done != {k: v for k, v in expected.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
+        sys.exit('ERROR patch_bytecode: entity bound sites %s, expected %s' % (done, expected))
     return 'stage-slot bounds 1056 -> %d: %s' % (PS1_TEMPENTITY_START, ' '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
 UPSTREAM_ENTITY_COUNT, PS1_ENTITY_COUNT = 1184, 0x380
 CLEARALL_SITES = {'Special': 1}
+CLEARALL_SITES_S1 = {'Special': 2}  # Sonic 1 (docs/37)
 
 
-def patch_clear_all(bcdir):
+def patch_clear_all(bcdir, expected=None):
     """Clear-all loops `WLower v 1184 / ResetObjectEntity v 0 0 0 0 / Inc v / loop` (the special stage's Special Finish)
     -> 896, the PS1's entity count: its slots 0-895 (temp slots included) are all the loop can reset; past them it only
     reset the blank scratch entity, counted as out-of-range accesses (288 a stage end)."""
@@ -2405,16 +2412,17 @@ def patch_clear_all(bcdir):
             assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
     if not done:
         return 'clear-all loops already %d' % PS1_ENTITY_COUNT
-    if done != {k: v for k, v in CLEARALL_SITES.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
-        sys.exit('ERROR patch_bytecode: clear-all sites %s, expected %s' % (done, CLEARALL_SITES))
+    expected = expected or CLEARALL_SITES
+    if done != {k: v for k, v in expected.items() if os.path.exists(os.path.join(bcdir, k + '.bin'))}:
+        sys.exit('ERROR patch_bytecode: clear-all sites %s, expected %s' % (done, expected))
     return 'clear-all loops 1184 -> %d: %s' % (PS1_ENTITY_COUNT, ' '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
-def patch_player_input(bcdir):
+def patch_player_input(bcdir, sig=None):
     why = returns_balanced(bcdir)
     if why:
         sys.exit('ERROR patch_bytecode: PS1PlayerInput calls script functions it cannot run natively: %s' % why)
-    return patch_global_function(bcdir, PLAYERINPUT_FN_SIG, 'PS1PlayerInput')
+    return patch_global_function(bcdir, sig or PLAYERINPUT_FN_SIG, 'PS1PlayerInput')
 
 
 # Mystic Cave C Ledge update sub (with its jump-table entries), transcribed by PS1CLedge.
@@ -2971,9 +2979,9 @@ PLAYERFN53_SIG = [
 ]
 
 
-def patch_player_physics(bcdir):
-    """The player physics functions (PLAYERFN*_SIG) -> PS1PlayerFn<N> / return, all or none: PS1PlayerFn6 calls
-    PS1PlayerFn51 directly, so every signature is checked before any function is rewritten."""
+def patch_player_physics(bcdir, game_sigs=None):
+    """The player physics functions (PLAYERFN*_SIG, or game_sigs {n: signature}) -> PS1PlayerFn<N> / return, all or
+    none: PS1PlayerFn6 calls PS1PlayerFn51 directly, so every signature is checked before any function is rewritten."""
     names, vars_ = bs.tables(3)
     fn = [n for n, _ in names]
     ret = fn.index('return')
@@ -2982,7 +2990,7 @@ def patch_player_physics(bcdir):
     code, p = bs.blocks(raw, 0)
     rest = raw[p:]
     starts = [s for s, _ in bs.load(path)[4]]
-    sigs = [(n, globals()['PLAYERFN%d_SIG' % n]) for n in (2, 3, 4, 5, 6, 51, 52, 53)]
+    sigs = [(n, (game_sigs or {}).get(n) or globals()['PLAYERFN%d_SIG' % n]) for n in (2, 3, 4, 5, 6, 51, 52, 53)]
     found, already = [], 0
     for n, sig in sigs:
         op = fn.index('PS1PlayerFn%d' % n)
@@ -3718,12 +3726,14 @@ def patch_function_group(bcdir, group, requires=(), what='functions'):
     return '%s native: functions %s' % (what, ' '.join(str(f) for _, f, _, _ in found))
 
 
-def patch_tails_ai(bcdir):
+def patch_tails_ai(bcdir, game_sigs=None, fn6_sig=None):
+    """Tails's CPU (TAILSFN*_SIG, or game_sigs {n: signature}; fn6_sig: the jump PS1TailsFn62 calls directly)."""
     why = returns_balanced(bcdir)
     if why:
         sys.exit('ERROR patch_bytecode: PS1TailsFn67 cannot run its variable call: %s' % why)
-    return patch_function_group(bcdir, [('PS1TailsFn%d' % n, globals()['TAILSFN%d_SIG' % n]) for n in (61, 62, 66, 67)],
-                                requires=[('PS1PlayerFn6', PLAYERFN6_SIG)], what="Tails's CPU")
+    return patch_function_group(bcdir, [('PS1TailsFn%d' % n, (game_sigs or {}).get(n) or globals()['TAILSFN%d_SIG' % n])
+                                        for n in (61, 62, 66, 67)],
+                                requires=[('PS1PlayerFn6', fn6_sig or PLAYERFN6_SIG)], what="Tails's CPU")
 
 
 # Metropolis MPZ Setup update sub (with its jump-table entries), transcribed by PS1MPZSetup (calls function 46).
@@ -5411,9 +5421,1989 @@ def patch_oscillate(bcdir):
         f, c['state'], c['params'], c['bits'], c['n'])
 
 
+def substituted(sig, subs):
+    """A Sonic 2 signature with whole lines replaced (Sonic 1's numbering, docs/37); every replacement must apply."""
+    out = [subs.get(l, l) for l in sig]
+    missing = [l for l in subs if l not in sig]
+    assert not missing, missing
+    return out
+
+
+# Sonic 1's player physics (docs/37 phase 2b): the same functions as Sonic 2's (PS1PlayerFn* natives, PS1_ANI_JUMPING /
+# PS1_ST_*): the jumping animation is G[64], the air / rolling / rolling-jump states 11 / 13 / 14, function 51 is 52.
+PLAYERFN_SIGS_S1 = {
+    4: substituted(PLAYERFN4_SIG, {'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,67]': 'IfEqual 12 OBJECTANIMATION GLOBAL[1,0,64]'}),
+    6: substituted(PLAYERFN6_SIG, {'IfNotEqual 2 OBJECTANIMATION GLOBAL[1,0,67]': 'IfNotEqual 2 OBJECTANIMATION GLOBAL[1,0,64]',
+                                   'Equal OBJECTANIMATION GLOBAL[1,0,67]': 'Equal OBJECTANIMATION GLOBAL[1,0,64]',
+                                   'CallFunction 51': 'CallFunction 52', 'IfEqual 6 OBJECTSTATE 14': 'IfEqual 6 OBJECTSTATE 13',
+                                   'Equal OBJECTSTATE 15': 'Equal OBJECTSTATE 14', 'Equal OBJECTSTATE 12': 'Equal OBJECTSTATE 11'}),
+}
+
+# Sonic 1's HUD function (GlobalCode 72, PS1HUDDraw with PS1_G_SCORE / PS1_G_LIVES): the score is G[21], the lives G[23].
+HUD_FN_SIG_S1 = substituted(HUD_FN_SIG, {'DrawNumbers 0 104 13 GLOBAL[1,0,22] 6 8 0': 'DrawNumbers 0 104 13 GLOBAL[1,0,21] 6 8 0',
+                                          'DrawNumbers 24 56 220 GLOBAL[1,0,25] 2 8 0': 'DrawNumbers 24 56 220 GLOBAL[1,0,23] 2 8 0'})
+
+# Sonic 1's Tails CPU (GlobalCode 62, 63, 67, 68; RSDKv4/Script.cpp PS1N / PS1_TAILS_LOCAL): function 61's locals and
+# tables 1064 lower, and Sonic 1's state / function / animation numbers.
+S1_NUMBERS = {'16': '15', '17': '16', '19': '18', '27': '26', '28': '27', '29': '28', '34': '35', '61': '62', '63': '64',
+              '65': '66', '68': '69'}
+
+
+def tails_s1(sig):
+    import re
+    out = []
+    for l in sig:
+        l = re.sub(r'\b202(1\d|2\d|3\d)\b', lambda m: str(int(m.group(0)) - 1064), l)
+        w = l.split()
+        if w[0] in ('IfEqual', 'IfNotEqual', 'CheckEqual', 'CheckNotEqual') and w[-2].startswith('OBJECTSTATE') or \
+                w[0] == 'Equal' and w[1] in ('OBJECTSTATE', 'OBJECTVALUE44') or w[0] == 'CallFunction':
+            w[-1] = S1_NUMBERS.get(w[-1], w[-1])
+        l = ' '.join(w).replace('GLOBAL[1,0,74]', 'GLOBAL[1,0,71]')
+        out.append(l)
+    return out
+
+
+TAILSFN_SIGS_S1 = {n: tails_s1(globals()['TAILSFN%d_SIG' % n]) for n in (61, 62, 66, 67)}
+
+
+# Sonic 1's Ring update sub (GlobalCode object "Ring"), transcribed by PS1RingUpdateS1 (RSDKv4/Script.cpp): Sonic 2's
+# without the 2P counters, with its achievements (CallNativeFunction2) and its globals.
+RING_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CheckEqual OBJECTSTATE[1,0,0] 26',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 26',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTSTATE[1,1,6] 25',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 2 TEMP0 0',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 4 CHECKRESULT 1',
+    'Equal OBJECTTYPE 12',
+    'Inc OBJECTVALUE0[1,0,0]',
+    'IfGreater 6 OBJECTVALUE0[1,0,0] 999',
+    'Equal OBJECTVALUE0[1,0,0] 999',
+    'endif',
+    'IfGreaterOrEqual 8 OBJECTVALUE0[1,0,0] GLOBAL[1,0,20]',
+    'IfNotEqual 10 GLOBAL[1,0,0] 2',
+    'Inc GLOBAL[1,0,23]',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 38 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'endif',
+    'IfEqual 12 STAGEDEBUGMODE 0',
+    'IfGreaterOrEqual 14 OBJECTVALUE0[1,0,0] 200',
+    'CallNativeFunction2 GLOBAL[1,0,99] 4 100',
+    'endif',
+    'endif',
+    'Add GLOBAL[1,0,20] 100',
+    'IfGreater 16 GLOBAL[1,0,20] 300',
+    'Equal GLOBAL[1,0,20] 1000',
+    'endif',
+    'endif',
+    'IfEqual 18 OBJECTPROPERTYVALUE 1',
+    'IfEqual 20 STAGEDEBUGMODE 0',
+    'IfEqual 22 GLOBAL[1,0,5] 0',
+    'IfEqual 24 ARRAYPOS6 0',
+    'IfEqual 26 OBJECTANIMATION[1,0,0] GLOBAL[1,0,64]',
+    'Inc GLOBAL[1,0,104]',
+    'IfEqual 28 GLOBAL[1,0,104] 30',
+    'CallNativeFunction2 GLOBAL[1,0,99] 0 100',
+    'Equal GLOBAL[1,0,104] 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 30 GLOBAL[1,0,19] 0',
+    'PlaySfx 1 0',
+    'SetSfxAttributes 1 -1 -100',
+    'Equal GLOBAL[1,0,19] 1',
+    'else',
+    'PlaySfx 2 0',
+    'SetSfxAttributes 2 -1 100',
+    'Equal GLOBAL[1,0,19] 0',
+    'endif',
+    'else',
+    'IfEqual 32 OBJECTSTATE 0',
+    'IfEqual 34 OBJECTVALUE37[1,1,6] 4',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -64 -64 64 64 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 36 CHECKRESULT 1',
+    'Equal OBJECTSTATE 1',
+    'Equal OBJECTVALUE1 ARRAYPOS6',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'next',
+    'IfEqual 38 OBJECTSTATE 1',
+    'Equal ARRAYPOS0 OBJECTVALUE1',
+    'IfNotEqual 40 OBJECTVALUE37[1,1,0] 4',
+    'Equal OBJECTTYPE 11',
+    'Equal OBJECTANIMATIONSPEED 128',
+    'Equal OBJECTALPHA 256',
+    'else',
+    'Equal ARRAYPOS0 OBJECTVALUE1',
+    'IfGreater 42 OBJECTXPOS OBJECTXPOS[1,1,0]',
+    'IfGreater 44 OBJECTXVEL 0',
+    'Sub OBJECTXVEL 49152',
+    'else',
+    'Sub OBJECTXVEL 12288',
+    'endif',
+    'else',
+    'IfLower 46 OBJECTXVEL 0',
+    'Add OBJECTXVEL 49152',
+    'else',
+    'Add OBJECTXVEL 12288',
+    'endif',
+    'endif',
+    'IfGreater 48 OBJECTYPOS OBJECTYPOS[1,1,0]',
+    'IfGreater 50 OBJECTYVEL 0',
+    'Sub OBJECTYVEL 49152',
+    'else',
+    'Sub OBJECTYVEL 12288',
+    'endif',
+    'else',
+    'IfLower 52 OBJECTYVEL 0',
+    'Add OBJECTYVEL 49152',
+    'else',
+    'Add OBJECTYVEL 12288',
+    'endif',
+    'endif',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'endif',
+    'endif',
+    'End',
+]
+
+# Sonic 1's player input function (GlobalCode 0), transcribed by PS1PlayerInputS1: after patch_back_pause(s1=True).
+PLAYERINPUT_FN_SIG_S1 = [
+    'IfEqual 0 GLOBAL[1,0,5] 0',
+    'IfEqual 2 OBJECTCONTROLMODE 0',
+    'CheckTouchRect 0 96 SCREENXCENTER SCREENYSIZE',
+    'IfGreater 4 CHECKRESULT -1',
+    'Equal ARRAYPOS0 CHECKRESULT',
+    'Equal TEMP0 TOUCHSCREENXPOS[1,1,0]',
+    'Sub TEMP0 SAVERAM[1,0,39]',
+    'Equal TEMP1 TOUCHSCREENYPOS[1,1,0]',
+    'Sub TEMP1 SAVERAM[1,0,40]',
+    'ATan2 TEMP2 TEMP0 TEMP1',
+    'Add TEMP2 32',
+    'And TEMP2 255',
+    'ShR TEMP2 6',
+    'switch 6 TEMP2',
+    'Equal KEYDOWNRIGHT 1',
+    'break',
+    'Equal KEYDOWNDOWN 1',
+    'break',
+    'Equal KEYDOWNLEFT 1',
+    'break',
+    'Equal KEYDOWNUP 1',
+    'break',
+    'endswitch',
+    'endif',
+    'CheckTouchRect SCREENXCENTER 96 SCREENXSIZE 240',
+    'IfGreater 14 CHECKRESULT -1',
+    'Equal KEYDOWNBUTTONA 1',
+    'endif',
+    'IfEqual 16 GLOBAL[1,0,97] 0',
+    'Or KEYPRESSBUTTONA KEYDOWNBUTTONA',
+    'endif',
+    'Equal GLOBAL[1,0,97] KEYDOWNBUTTONA',
+    'IfEqual 18 STAGEDEBUGMODE 1',
+    'CheckTouchRect 0 0 112 56',
+    'IfGreater 20 CHECKRESULT -1',
+    'Equal KEYDOWNBUTTONB 1',
+    'endif',
+    'IfEqual 22 GLOBAL[1,0,98] 0',
+    'Or KEYPRESSBUTTONB KEYDOWNBUTTONB',
+    'endif',
+    'Equal GLOBAL[1,0,98] KEYDOWNBUTTONB',
+    'endif',
+    'CheckTouchRect 240 0 SCREENXSIZE 40',
+    'IfGreater 24 CHECKRESULT -1',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 0',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'IfEqual 26 KEYPRESSSTART 1',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 0',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'IfEqual 28 KEYDOWNBUTTONB 2',
+    'PlaySfx 23 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal ENGINESTATE 5',
+    'endif',
+    'endif',
+    'ProcessObjectControl',
+    'else',
+    'IfEqual 30 GLOBAL[1,0,102] 0',
+    'CheckTouchRect 0 0 SCREENXSIZE SCREENYSIZE',
+    'IfEqual 32 KEYPRESSSTART 1',
+    'Equal CHECKRESULT 0',
+    'endif',
+    'IfGreater 34 CHECKRESULT -1',
+    'IfGreater 36 LOCAL[1,0,12] 1',
+    'Equal LOCAL[1,0,12] 1',
+    'endif',
+    'endif',
+    'IfEqual 38 KEYPRESSSTART 1',
+    'IfGreater 40 LOCAL[1,0,12] 1',
+    'Equal LOCAL[1,0,12] 1',
+    'endif',
+    'endif',
+    'endif',
+    'IfEqual 42 OBJECTCONTROLMODE 0',
+    'Dec LOCAL[1,0,11]',
+    'IfLower 44 LOCAL[1,0,11] 1',
+    'IfLower 46 LOCAL[1,0,9] LOCAL[1,0,10]',
+    'GetTableValue TEMP0 LOCAL[1,0,9] LOCAL[1,0,8]',
+    'GetBit OBJECTUP TEMP0 0',
+    'GetBit OBJECTDOWN TEMP0 1',
+    'GetBit OBJECTLEFT TEMP0 2',
+    'GetBit OBJECTRIGHT TEMP0 3',
+    'GetBit OBJECTJUMPPRESS TEMP0 4',
+    'GetBit OBJECTJUMPHOLD TEMP0 5',
+    'Inc LOCAL[1,0,9]',
+    'GetTableValue LOCAL[1,0,11] LOCAL[1,0,9] LOCAL[1,0,8]',
+    'Inc LOCAL[1,0,9]',
+    'endif',
+    'else',
+    'IfEqual 48 OBJECTJUMPPRESS 1',
+    'Equal OBJECTJUMPPRESS 0',
+    'endif',
+    'endif',
+    'IfGreater 50 LOCAL[1,0,12] 0',
+    'Dec LOCAL[1,0,12]',
+    'IfLower 52 LOCAL[1,0,12] 1',
+    'ResetObjectEntity 11 6 0 0 0',
+    'Equal OBJECTSTATE[1,0,11] 8',
+    'Equal OBJECTPRIORITY[1,0,11] 1',
+    'Equal OBJECTDRAWORDER[1,0,11] 6',
+    'Equal OBJECTVALUE7 80',
+    'Equal SCREENCAMERAENABLED 0',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 54 OBJECTVALUE6 0',
+    'Dec OBJECTVALUE6',
+    'IfLower 56 OBJECTVALUE6 1',
+    'Equal ARRAYPOS6 OBJECTENTITYPOS',
+    'CallFunction 42',
+    'IfNotEqual 58 GLOBAL[1,0,95] 0',
+    'CallFunction GLOBAL[1,0,95]',
+    'endif',
+    'Equal OBJECTVALUE6 0',
+    'endif',
+    'endif',
+    'IfNotEqual 60 OBJECTSTATE 26',
+    'IfGreater 62 OBJECTVALUE8 0',
+    'Dec OBJECTVALUE8',
+    'GetBit TEMP0 OBJECTVALUE8 2',
+    'IfEqual 64 TEMP0 1',
+    'Equal OBJECTVISIBLE 0',
+    'else',
+    'Equal OBJECTVISIBLE 1',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 66 OBJECTVALUE7 0',
+    'Dec OBJECTVALUE7',
+    'IfEqual 68 OBJECTVALUE7 0',
+    'IfEqual 70 MUSICCURRENTTRACK 2',
+    'PlayMusic 0',
+    'endif',
+    'IfEqual 72 OBJECTTYPE[2,1,7] GLOBAL[1,0,39]',
+    'Equal ARRAYPOS6 OBJECTENTITYPOS',
+    'Equal ARRAYPOS0 ARRAYPOS6',
+    'Add ARRAYPOS0 ARRAYPOS7',
+    'CallFunction 38',
+    'endif',
+    'endif',
+    'endif',
+    'IfNotEqual 74 OBJECTSTATE 15',
+    'IfNotEqual 76 OBJECTSTATE 16',
+    'IfGreater 78 OBJECTLOOKPOSY 0',
+    'Sub OBJECTLOOKPOSY 2',
+    'endif',
+    'IfLower 80 OBJECTLOOKPOSY 0',
+    'Add OBJECTLOOKPOSY 2',
+    'endif',
+    'endif',
+    'endif',
+    'IfGreater 82 OBJECTVALUE11 0',
+    'Dec OBJECTVALUE11',
+    'IfEqual 84 OBJECTVALUE11 0',
+    'Equal SCREENCAMERASTYLE 0',
+    'endif',
+    'endif',
+    'IfNotEqual 86 OBJECTSTATE 18',
+    'IfNotEqual 88 OBJECTVALUE26 0',
+    'StopSfx 19',
+    'StopSfx 20',
+    'Equal OBJECTVALUE26 0',
+    'endif',
+    'endif',
+    'return',
+]
+
+
+# Sonic 1's Stage Setup update sub with its jump-table entries, transcribed by PS1StageSetupUpdateS1 (calls 71, 51).
+STAGESETUP_SIG_S1 = [
+    'IfEqual 0 STAGESTATE 1',
+    'Inc GLOBAL[1,0,17]',
+    'IfEqual 2 GLOBAL[1,0,17] 4',
+    'Equal GLOBAL[1,0,17] 0',
+    'Inc GLOBAL[1,0,18]',
+    'And GLOBAL[1,0,18] 7',
+    'endif',
+    'Inc LOCAL[1,0,22826]',
+    'IfGreater 4 LOCAL[1,0,22826] 17',
+    'Equal LOCAL[1,0,22826] 0',
+    'endif',
+    'IfNotEqual 6 GLOBAL[1,0,0] 2',
+    'IfGreaterOrEqual 8 GLOBAL[1,0,21] GLOBAL[1,0,22]',
+    'Inc GLOBAL[1,0,23]',
+    'Add GLOBAL[1,0,22] 50000',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 38 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'endif',
+    'endif',
+    'Inc GLOBAL[1,0,16]',
+    'And GLOBAL[1,0,16] 511',
+    'CallFunction 71',
+    'IfEqual 10 STAGETIMEENABLED 1',
+    'IfEqual 12 STAGEMINUTES 10',
+    'CheckEqual STAGEDEBUGMODE 1',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual GLOBAL[1,0,0] 2',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 14 TEMP0 0',
+    'Equal ARRAYPOS6 0',
+    'Equal OBJECTTYPE[1,0,0] 1',
+    'CallFunction 51',
+    'endif',
+    'Equal STAGEMINUTES 9',
+    'Equal STAGESECONDS 59',
+    'Equal STAGEMILLISECONDS 99',
+    'Equal STAGETIMEENABLED 0',
+    'endif',
+    'endif',
+    'ForEachActive 16 256 ARRAYPOS6',
+    'Equal TEMP0 OBJECTCOLLISIONLEFT[1,1,6]',
+    'ShL TEMP0 16',
+    'Add TEMP0 OBJECTXPOS[1,1,6]',
+    'Equal TEMP1 STAGECURXBOUNDARY1',
+    'ShL TEMP1 16',
+    'IfLower 18 TEMP0 TEMP1',
+    'IfEqual 20 OBJECTRIGHT[1,1,6] 1',
+    'Equal OBJECTXVEL[1,1,6] 65536',
+    'Equal OBJECTSPEED[1,1,6] 65536',
+    'else',
+    'Equal OBJECTXVEL[1,1,6] 0',
+    'Equal OBJECTSPEED[1,1,6] 0',
+    'endif',
+    'Equal OBJECTXPOS[1,1,6] TEMP1',
+    'Equal TEMP0 OBJECTCOLLISIONLEFT[1,1,6]',
+    'ShL TEMP0 16',
+    'Sub OBJECTXPOS[1,1,6] TEMP0',
+    'endif',
+    'Equal TEMP1 STAGECURYBOUNDARY2',
+    'ShL TEMP1 16',
+    'IfLower 22 TEMP1 GLOBAL[1,0,47]',
+    'IfGreater 24 OBJECTYPOS[1,1,6] GLOBAL[1,0,47]',
+    'CallFunction 51',
+    'endif',
+    'else',
+    'IfGreater 26 OBJECTYPOS[1,1,6] TEMP1',
+    'CallFunction 51',
+    'endif',
+    'endif',
+    'next',
+    'endif',
+    'IfEqual 28 GLOBAL[1,0,5] 0',
+    'IfGreater 30 OBJECTCONTROLMODE[1,0,0] -1',
+    'Equal GLOBAL[1,0,7] 1',
+    'else',
+    'Equal GLOBAL[1,0,7] 0',
+    'endif',
+    'else',
+    'Equal GLOBAL[1,0,7] 0',
+    'endif',
+    'Equal ARRAYPOS6 ARRAYPOS7',
+    'Dec ARRAYPOS6',
+    'WGreater 32 ARRAYPOS6 -1',
+    'IfEqual 34 OBJECTVISIBLE[1,1,6] 1',
+    'Add ARRAYPOS6 ARRAYPOS7',
+    'IfEqual 36 OBJECTVALUE18[1,1,6] 0',
+    'Sub ARRAYPOS6 ARRAYPOS7',
+    'Equal ARRAYPOS0 OBJECTVALUE18[1,1,6]',
+    'AddDrawListEntityRef ARRAYPOS0 ARRAYPOS6',
+    'Add ARRAYPOS6 ARRAYPOS7',
+    'AddDrawListEntityRef ARRAYPOS0 ARRAYPOS6',
+    'Sub ARRAYPOS6 ARRAYPOS7',
+    'else',
+    'Sub ARRAYPOS6 ARRAYPOS7',
+    'Equal ARRAYPOS0 OBJECTVALUE18[1,1,6]',
+    'Add ARRAYPOS6 ARRAYPOS7',
+    'AddDrawListEntityRef ARRAYPOS0 ARRAYPOS6',
+    'Sub ARRAYPOS6 ARRAYPOS7',
+    'Equal ARRAYPOS0 OBJECTVALUE18[1,1,6]',
+    'AddDrawListEntityRef ARRAYPOS0 ARRAYPOS6',
+    'endif',
+    'endif',
+    'Dec ARRAYPOS6',
+    'loop',
+    'End',
+    'JT 0 IfEqual @72 @73',
+    'JT 2 IfEqual @6 @7',
+    'JT 8 IfGreater @10 @11',
+    'JT 11 IfNotEqual @20 @21',
+    'JT 12 IfGreaterOrEqual @19 @20',
+    'JT 24 IfEqual @40 @41',
+    'JT 25 IfEqual @39 @40',
+    'JT 30 IfEqual @34 @35',
+    'JT 41 ForEachActive @41 @72',
+    'JT 47 IfLower @59 @60',
+    'JT 48 IfEqual @52 @55',
+    'JT 62 IfLower @67 @71',
+    'JT 63 IfGreater @65 @66',
+    'JT 67 IfGreater @69 @70',
+    'JT 73 IfEqual @80 @82',
+    'JT 74 IfGreater @77 @79',
+    'JT 84 WGreater @84 @106',
+    'JT 85 IfEqual @103 @104',
+    'JT 87 IfEqual @95 @103',
+]
+
+
+# Sonic 1's special stage function 9 (an object's place in the rotating maze), transcribed by PS1SSRotPos.
+SSROTPOS_FN_SIG_S1 = [
+    'Equal TEMP2 OBJECTXPOS',
+    'Sub TEMP2 OBJECTXPOS[1,0,0]',
+    'ShR TEMP2 8',
+    'Equal TEMP3 OBJECTYPOS',
+    'Sub TEMP3 OBJECTYPOS[1,0,0]',
+    'ShR TEMP3 8',
+    'Sin TEMP4 LOCAL[1,0,0]',
+    'Mul TEMP4 TEMP3',
+    'Cos TEMP5 LOCAL[1,0,0]',
+    'Mul TEMP5 TEMP2',
+    'Equal TEMP0 TEMP4',
+    'Add TEMP0 TEMP5',
+    'ShR TEMP0 1',
+    'Add TEMP0 OBJECTXPOS[1,0,0]',
+    'Cos TEMP4 LOCAL[1,0,0]',
+    'Mul TEMP4 TEMP3',
+    'Sin TEMP5 LOCAL[1,0,0]',
+    'Mul TEMP5 TEMP2',
+    'Equal TEMP1 TEMP4',
+    'Sub TEMP1 TEMP5',
+    'ShR TEMP1 1',
+    'Add TEMP1 OBJECTYPOS[1,0,0]',
+    'Equal OBJECTROTATION 512',
+    'Sub OBJECTROTATION LOCAL[1,0,0]',
+    'return',
+]
+
+
+# Sonic 1's special stage function 10 (a maze block against the player), transcribed by PS1SSBlockCollide.
+SSBLOCKCOLLIDE_FN_SIG_S1 = [
+    'BoxCollisionTest 2 OBJECTENTITYPOS -12 -12 12 12 0 65536 65536 65536 65536',
+    'IfNotEqual 0 CHECKRESULT 0',
+    'SetBit OBJECTVALUE11[1,0,0] CHECKRESULT 1',
+    'else',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -10 -10 10 10 0 65536 65536 65536 65536',
+    'IfEqual 2 CHECKRESULT 1',
+    'Equal TEMP0 OBJECTXVEL[1,0,0]',
+    'Equal TEMP1 OBJECTYVEL[1,0,0]',
+    'Abs TEMP0',
+    'Abs TEMP1',
+    'IfGreater 4 TEMP0 TEMP1',
+    'IfGreater 6 OBJECTXVEL[1,0,0] 0',
+    'SetBit OBJECTVALUE11[1,0,0] 2 1',
+    'Equal OBJECTXPOS[1,0,0] OBJECTCOLLISIONLEFT[1,0,0]',
+    'Sub OBJECTXPOS[1,0,0] 12',
+    'ShL OBJECTXPOS[1,0,0] 16',
+    'else',
+    'SetBit OBJECTVALUE11[1,0,0] 3 1',
+    'Equal OBJECTXPOS[1,0,0] OBJECTCOLLISIONRIGHT[1,0,0]',
+    'Add OBJECTXPOS[1,0,0] 12',
+    'ShL OBJECTXPOS[1,0,0] 16',
+    'endif',
+    'Add OBJECTXPOS[1,0,0] OBJECTXPOS',
+    'else',
+    'IfGreater 8 OBJECTYVEL[1,0,0] 0',
+    'SetBit OBJECTVALUE11[1,0,0] 1 1',
+    'Equal OBJECTYPOS[1,0,0] OBJECTCOLLISIONTOP[1,0,0]',
+    'Sub OBJECTYPOS[1,0,0] 12',
+    'ShL OBJECTYPOS[1,0,0] 16',
+    'else',
+    'SetBit OBJECTVALUE11[1,0,0] 4 1',
+    'Equal OBJECTYPOS[1,0,0] OBJECTCOLLISIONBOTTOM[1,0,0]',
+    'Add OBJECTYPOS[1,0,0] 12',
+    'ShL OBJECTYPOS[1,0,0] 16',
+    'endif',
+    'Add OBJECTYPOS[1,0,0] OBJECTYPOS',
+    'endif',
+    'endif',
+    'endif',
+    'return',
+    'JT 1 IfNotEqual @4 @39',
+    'JT 5 IfEqual @37 @38',
+    'JT 10 IfGreater @24 @37',
+    'JT 11 IfGreater @17 @22',
+    'JT 24 IfGreater @30 @35',
+]
+# The special stage's coloured blocks' draw sub with its jump-table entries, {a} / {b} the two type numbers (the opcode's
+# operands), transcribed by PS1SSBlockDraw (which runs function 9 as PS1SSRotPos).
+SSBLOCKDRAW_SIG_S1 = [
+    'IfGreater 0 OBJECTPROPERTYVALUE 0',
+    'Equal TEMP0 LOCAL[1,0,2027]',
+    'ShR TEMP0 3',
+    'Equal TEMP1 OBJECTPROPERTYVALUE',
+    'Sub TEMP1 TEMP0',
+    'switch 2 TEMP1',
+    'Equal OBJECTTYPE {a}',
+    'endswitch',
+    'endif',
+    'CallFunction 9',
+    'DrawSpriteFX 0 1 TEMP0 TEMP1',
+    'DrawSpriteXY 1 TEMP0 TEMP1',
+    'Equal TEMP2 OBJECTROTATION',
+    'ShR TEMP2 3',
+    'Add TEMP2 2',
+    'DrawSpriteFX TEMP2 1 TEMP0 TEMP1',
+    'Equal OBJECTTYPE {b}',
+    'End',
+    'JT 0 IfGreater @8 @9',
+    'JT 5 switch 1 3 @7 @8 @6 @7 @6',
+]
+SS_COLOURED_BLOCKS = ('Blue Block', 'Yellow Block', 'Pink Block', 'Green Block')
+
+
+def patch_ss_block_draw(bcdir):
+    """Special's coloured blocks: each draw sub that is SSBLOCKDRAW_SIG_S1 with its own two types -> PS1SSBlockDraw a b /
+    End. Function 9 must be SSROTPOS_FN_SIG_S1 or already PS1SSRotPos (the native calls it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1SSBlockDraw'), fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f9 = bs.load(path)[4][9][0]
+    if full[f9] != fn.index('PS1SSRotPos') and fn_listing(path, 9, names, vars_) != SSROTPOS_FN_SIG_S1:
+        return 'PS1SSBlockDraw: function 9 is not the one PS1SSRotPos transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name in SS_COLOURED_BLOCKS:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][1]
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        got = sub_listing(path, k, 1, names, vars_)[3]
+        ab = [int(l.split()[-1]) for l in got if l.startswith('Equal OBJECTTYPE ')]
+        if len(ab) != 2 or got != [l.replace('{a}', str(ab[0])).replace('{b}', str(ab[1])) for l in SSBLOCKDRAW_SIG_S1]:
+            sys.exit('ERROR patch_bytecode: %s draw sub is not the one PS1SSBlockDraw transcribes' % name)
+        own[ptr - base:ptr - base + 6] = [op, 2, ab[0], 2, ab[1], end]
+        full[ptr:ptr + 6] = [op, 2, ab[0], 2, ab[1], end]
+        done.append('%s (%d, %d)' % (name, ab[0], ab[1]))
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'PS1SSBlockDraw native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
+# The special stage's Ring update sub (with its jump-table entries), transcribed by PS1SSRingUpdate.
+SSRING_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 2 CHECKRESULT 1',
+    'Equal OBJECTTYPE 19',
+    'Inc OBJECTVALUE0[1,1,6]',
+    'IfGreater 4 OBJECTVALUE0[1,1,6] 999',
+    'Equal OBJECTVALUE0[1,1,6] 999',
+    'endif',
+    'IfGreaterOrEqual 6 OBJECTVALUE0[1,1,6] GLOBAL[1,0,20]',
+    'IfNotEqual 8 GLOBAL[1,0,0] 2',
+    'Inc GLOBAL[1,0,23]',
+    'PlaySfx 24 0',
+    'PauseMusic',
+    'ResetObjectEntity 25 23 2 0 0',
+    'Equal OBJECTPRIORITY[1,0,25] 1',
+    'endif',
+    'Add GLOBAL[1,0,20] 100',
+    'IfGreaterOrEqual 10 GLOBAL[1,0,20] 300',
+    'Equal GLOBAL[1,0,20] 1000',
+    'endif',
+    'endif',
+    'IfEqual 12 LOCAL[1,0,3] 0',
+    'IfEqual 14 GLOBAL[1,0,19] 0',
+    'PlaySfx 1 0',
+    'SetSfxAttributes 1 -1 -100',
+    'Equal GLOBAL[1,0,19] 1',
+    'else',
+    'PlaySfx 2 0',
+    'SetSfxAttributes 2 -1 100',
+    'Equal GLOBAL[1,0,19] 0',
+    'endif',
+    'endif',
+    'IfEqual 16 OBJECTVALUE0[1,1,6] 50',
+    'Inc GLOBAL[1,0,24]',
+    'PlaySfx 46 0',
+    'endif',
+    'endif',
+    'next',
+    'End',
+    'JT 0 ForEachActive @0 @38',
+    'JT 2 IfEqual @36 @37',
+    'JT 5 IfGreater @7 @8',
+    'JT 8 IfGreaterOrEqual @20 @21',
+    'JT 9 IfNotEqual @15 @16',
+    'JT 17 IfGreaterOrEqual @19 @20',
+    'JT 21 IfEqual @31 @32',
+    'JT 22 IfEqual @27 @31',
+    'JT 32 IfEqual @35 @36',
+]
+# The special stage's coloured blocks' update sub (function 10 per player), transcribed by PS1SSBlockUpdate.
+SSBLOCKUPDATE_SIG_S1 = [
+    'ForEachActive 0 256 ARRAYPOS6',
+    'CallFunction 10',
+    'next',
+    'End',
+    'JT 0 ForEachActive @0 @3',
+]
+
+
+def patch_ss_block_update(bcdir):
+    """Special's coloured blocks' update subs -> PS1SSBlockUpdate / End; function 10 must be SSBLOCKCOLLIDE_FN_SIG_S1 or
+    already PS1SSBlockCollide (the native calls it directly)."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    path = os.path.join(bcdir, 'Special.bin')
+    full = bs.full_code(path)[0]
+    f10 = bs.load(path)[4][10][0]
+    if full[f10] != fn.index('PS1SSBlockCollide') and fn_listing(path, 10, names, vars_) != SSBLOCKCOLLIDE_FN_SIG_S1:
+        return 'PS1SSBlockUpdate: function 10 is not the one PS1SSBlockCollide transcribes (not patched)'
+    return ', '.join(patch_stage_sub(bcdir, name, 0, SSBLOCKUPDATE_SIG_S1, 'PS1SSBlockUpdate', with_jumps=True)
+                     for name in SS_COLOURED_BLOCKS)
+
+
+# The special stage's other draw subs (with their jump-table entries), all placing the object with function 9 first:
+# PS1SSPlaceDraw mode (0: `DrawSpriteXY OBJECTFRAME`, 1: `DrawSpriteXY GLOBAL[18]`), PS1SSAnimDraw kind (Goal, Up Down,
+# Red White), PS1SSGemDraw.
+SSPLACEDRAW_SIGS_S1 = {0: ['CallFunction 9', 'DrawSpriteXY OBJECTFRAME TEMP0 TEMP1', 'End'],
+                       1: ['CallFunction 9', 'DrawSpriteXY GLOBAL[1,0,18] TEMP0 TEMP1', 'End']}
+SSANIMDRAW_GOAL_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'DrawSpriteXY TEMP2 TEMP0 TEMP1',
+    'End',
+]
+SSANIMDRAW_UPDOWN_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'IfEqual 0 TEMP2 0',
+    'DrawSpriteXY OBJECTPROPERTYVALUE TEMP0 TEMP1',
+    'else',
+    'DrawSpriteXY 2 TEMP0 TEMP1',
+    'endif',
+    'End',
+    'JT 4 IfEqual @7 @9',
+]
+SSANIMDRAW_REDWHITE_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 GLOBAL[1,0,16]',
+    'And TEMP2 15',
+    'ShR TEMP2 3',
+    'DrawSpriteFX TEMP2 3 TEMP0 TEMP1',
+    'End',
+]
+SSGEMDRAW_SIG_S1 = [
+    'CallFunction 9',
+    'Equal TEMP2 LOCAL[1,0,2025]',
+    'Div TEMP2 5',
+    'switch 0 TEMP2',
+    'Equal OBJECTDIRECTION 0',
+    'break',
+    'Equal OBJECTDIRECTION 1',
+    'break',
+    'Equal OBJECTDIRECTION 3',
+    'break',
+    'Equal OBJECTDIRECTION 2',
+    'break',
+    'endswitch',
+    'DrawSpriteFX OBJECTPROPERTYVALUE 5 TEMP0 TEMP1',
+    'End',
+    'JT 3 switch 0 3 @12 @13 @4 @6 @8 @10',
+]
+SS_DRAWS = (('Ring', 'PS1SSPlaceDraw', 1, SSPLACEDRAW_SIGS_S1[1]), ('Rotate Block', 'PS1SSPlaceDraw', 0, SSPLACEDRAW_SIGS_S1[0]),
+            ('Bumper', 'PS1SSPlaceDraw', 0, SSPLACEDRAW_SIGS_S1[0]), ('Goal Block', 'PS1SSAnimDraw', 0, SSANIMDRAW_GOAL_S1),
+            ('Up Down Block', 'PS1SSAnimDraw', 1, SSANIMDRAW_UPDOWN_S1),
+            ('Red White Block', 'PS1SSAnimDraw', 2, SSANIMDRAW_REDWHITE_S1), ('Gem Block', 'PS1SSGemDraw', None, SSGEMDRAW_SIG_S1))
+
+
+def patch_ss_draws(bcdir):
+    """Special's other draw subs (SS_DRAWS) -> op [operand] / End when exactly their signatures; function 9 must be
+    SSROTPOS_FN_SIG_S1 or already PS1SSRotPos (the natives call it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    end = fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f9 = bs.load(path)[4][9][0]
+    if full[f9] != fn.index('PS1SSRotPos') and fn_listing(path, 9, names, vars_) != SSROTPOS_FN_SIG_S1:
+        return 'special stage draws: function 9 is not the one PS1SSRotPos transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name, op_name, arg, sig in SS_DRAWS:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][1]
+        op = fn.index(op_name)
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        if sub_listing(path, k, 1, names, vars_)[3] != sig:
+            sys.exit('ERROR patch_bytecode: %s draw sub is not the one %s transcribes' % (name, op_name))
+        words = [op, end] if arg is None else [op, 2, arg, end]
+        own[ptr - base:ptr - base + len(words)] = words
+        full[ptr:ptr + len(words)] = words
+        done.append(name)
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'special stage draws native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
+# The special stage's other update subs (with their jump-table entries), transcribed by PS1SSObjUpdate kind.
+SSOBJUPDATE_SIGS_S1 = {
+    0: [  # Red White Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'IfEqual 2 OBJECTPROPERTYVALUE 0',
+        'CallFunction 10',
+        'else',
+        'switch 4 OBJECTPROPERTYVALUE',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -160 36 160 60 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 13 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 36 -160 60 160 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 15 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -60 -160 -36 160 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 17 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -160 -60 160 -36 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 19 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 36 -24 60 24 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 21 CHECKRESULT 1',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'Equal OBJECTINKEFFECT 0',
+        'endif',
+        'break',
+        'endswitch',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @38',
+        'JT 1 IfEqual @4 @37',
+        'JT 4 switch 1 5 @35 @36 @5 @11 @17 @23 @29',
+        'JT 6 IfEqual @9 @10',
+        'JT 12 IfEqual @15 @16',
+        'JT 18 IfEqual @21 @22',
+        'JT 24 IfEqual @27 @28',
+        'JT 30 IfEqual @33 @34',
+    ],
+    1: [  # Gem Block
+        'IfEqual 0 OBJECTSTATE 1',
+        'Equal OBJECTPROPERTYVALUE OBJECTVALUE0',
+        'ShR OBJECTPROPERTYVALUE 1',
+        'And OBJECTPROPERTYVALUE 3',
+        'Inc OBJECTVALUE0',
+        'IfEqual 2 OBJECTVALUE0 16',
+        'Equal OBJECTPRIORITY 0',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTPROPERTYVALUE OBJECTVALUE1',
+        'Inc OBJECTPROPERTYVALUE',
+        'IfEqual 4 OBJECTPROPERTYVALUE 4',
+        'Equal OBJECTTYPE 0',
+        'else',
+        'Equal OBJECTSTATE 0',
+        'endif',
+        'Equal LOCAL[1,0,2026] 0',
+        'endif',
+        'ForEachActive 6 256 ARRAYPOS6',
+        'CallFunction 10',
+        'next',
+        'else',
+        'ForEachActive 8 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfEqual 10 LOCAL[1,0,2026] 0',
+        'IfGreater 12 CHECKRESULT 0',
+        'Equal OBJECTSTATE 1',
+        'Equal OBJECTPRIORITY 1',
+        'Equal LOCAL[1,0,2026] 1',
+        'Equal OBJECTVALUE1 OBJECTPROPERTYVALUE',
+        'IfEqual 14 LOCAL[1,0,3] 0',
+        'PlaySfx 43 0',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'endif',
+        'End',
+        'JT 0 IfEqual @21 @36',
+        'JT 5 IfEqual @16 @17',
+        'JT 10 IfEqual @13 @15',
+        'JT 17 ForEachActive @17 @20',
+        'JT 21 ForEachActive @21 @35',
+        'JT 23 IfEqual @33 @34',
+        'JT 24 IfGreater @32 @33',
+        'JT 29 IfEqual @31 @32',
+    ],
+    2: [  # Up Down Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfNotEqual 2 CHECKRESULT 0',
+        'IfEqual 4 OBJECTVALUE15[1,1,6] 0',
+        'Equal OBJECTVALUE15[1,1,6] 30',
+        'IfEqual 6 OBJECTPROPERTYVALUE 0',
+        'IfLower 8 LOCAL[1,0,1] 1',
+        'Inc LOCAL[1,0,1]',
+        'Equal OBJECTPROPERTYVALUE 1',
+        'PlaySfx 42 0',
+        'endif',
+        'else',
+        'IfGreater 10 LOCAL[1,0,1] 0',
+        'Dec LOCAL[1,0,1]',
+        'Equal OBJECTPROPERTYVALUE 0',
+        'PlaySfx 42 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @21',
+        'JT 2 IfNotEqual @19 @20',
+        'JT 3 IfEqual @18 @19',
+        'JT 5 IfEqual @12 @18',
+        'JT 6 IfLower @10 @11',
+        'JT 12 IfGreater @16 @17',
+    ],
+    3: [  # Rotate Block
+        'IfEqual 0 OBJECTSTATE 1',
+        'Equal OBJECTFRAME OBJECTVALUE0',
+        'ShR OBJECTFRAME 3',
+        'Inc OBJECTVALUE0',
+        'IfEqual 2 OBJECTVALUE0 32',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTSTATE 0',
+        'Equal OBJECTFRAME 0',
+        'endif',
+        'endif',
+        'ForEachActive 4 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfNotEqual 6 CHECKRESULT 0',
+        'IfEqual 8 OBJECTVALUE14[1,1,6] 0',
+        'Equal OBJECTVALUE14[1,1,6] 30',
+        'Equal OBJECTSTATE 1',
+        'Xor LOCAL[1,0,2] 1',
+        'PlaySfx 42 0',
+        'endif',
+        'endif',
+        'next',
+        'End',
+        'JT 0 IfEqual @9 @10',
+        'JT 4 IfEqual @8 @9',
+        'JT 10 ForEachActive @10 @21',
+        'JT 12 IfNotEqual @19 @20',
+        'JT 13 IfEqual @18 @19',
+    ],
+    4: [  # Goal Block
+        'ForEachActive 0 256 ARRAYPOS6',
+        'CallFunction 10',
+        'IfGreater 2 CHECKRESULT 0',
+        'Equal OBJECTSTATE[1,1,6] 1',
+        'Equal OBJECTXVEL[1,1,6] 0',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTINTERACTION[1,1,6] 0',
+        'ResetObjectEntity 20 22 0 0 0',
+        'Equal OBJECTPRIORITY[1,0,20] 1',
+        'PlaySfx 45 0',
+        'Equal STAGETIMEENABLED 0',
+        'Equal GLOBAL[1,0,7] 0',
+        'endif',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @16',
+        'JT 2 IfGreater @14 @15',
+    ],
+    5: [  # Bumper
+        'IfGreater 0 OBJECTSTATE 0',
+        'Equal OBJECTFRAME OBJECTVALUE0',
+        'Div OBJECTFRAME 5',
+        'Inc OBJECTFRAME',
+        'Inc OBJECTVALUE0',
+        'IfGreater 2 OBJECTVALUE0 22',
+        'Equal OBJECTVALUE0 0',
+        'Equal OBJECTSTATE 0',
+        'Equal OBJECTFRAME 0',
+        'endif',
+        'endif',
+        'IfEqual 4 OBJECTOUTOFBOUNDS 1',
+        'Equal OBJECTPRIORITY 0',
+        'endif',
+        'ForEachActive 6 256 ARRAYPOS6',
+        'CallFunction 10',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -14 14 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 8 CHECKRESULT 1',
+        'IfEqual 10 OBJECTSTATE 0',
+        'PlaySfx 41 0',
+        'endif',
+        'IfGreater 12 OBJECTVALUE0 5',
+        'PlaySfx 41 0',
+        'endif',
+        'Equal OBJECTSTATE 1',
+        'Equal OBJECTPRIORITY 1',
+        'Equal TEMP0 OBJECTXPOS[1,1,6]',
+        'Sub TEMP0 OBJECTXPOS',
+        'Equal TEMP1 OBJECTYPOS[1,1,6]',
+        'Sub TEMP1 OBJECTYPOS',
+        'ATan2 TEMP2 TEMP0 TEMP1',
+        'Cos256 TEMP0 TEMP2',
+        'Sin256 TEMP1 TEMP2',
+        'Mul TEMP0 1792',
+        'Mul TEMP1 1792',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'Equal OBJECTVALUE12[1,1,6] TEMP0',
+        'Equal OBJECTVALUE13[1,1,6] TEMP1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'endif',
+        'next',
+        'End',
+        'JT 0 IfGreater @10 @11',
+        'JT 5 IfGreater @9 @10',
+        'JT 11 IfEqual @13 @14',
+        'JT 14 ForEachActive @14 @42',
+        'JT 17 IfEqual @40 @41',
+        'JT 18 IfEqual @20 @21',
+        'JT 21 IfGreater @23 @24',
+    ],
+}
+SS_UPDATES = (('Red White Block', 0), ('Gem Block', 1), ('Up Down Block', 2), ('Rotate Block', 3), ('Goal Block', 4),
+              ('Bumper', 5))
+
+
+def patch_ss_updates(bcdir):
+    """Special's other update subs -> PS1SSObjUpdate kind / End when exactly SSOBJUPDATE_SIGS_S1[kind]; function 10 must
+    be SSBLOCKCOLLIDE_FN_SIG_S1 or already PS1SSBlockCollide (the native calls it directly)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1SSObjUpdate'), fn.index('End')
+    path = os.path.join(bcdir, 'Special.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    full = bs.full_code(path)[0]
+    base = len(full) - len(own)
+    f10 = bs.load(path)[4][10][0]
+    if full[f10] != fn.index('PS1SSBlockCollide') and fn_listing(path, 10, names, vars_) != SSBLOCKCOLLIDE_FN_SIG_S1:
+        return 'special stage updates: function 10 is not the one PS1SSBlockCollide transcribes (not patched)'
+    objs = object_sheets.stage_config(os.path.join(bcdir, '..', 'Data'), 'Special')[2]
+    done, already = [], []
+    for name, kind in SS_UPDATES:
+        k = objs.index(name)
+        ptr = bs.load(path)[2][k][0]
+        if full[ptr] == op:
+            already.append(name)
+            continue
+        if sub_listing(path, k, 0, names, vars_)[3] != SSOBJUPDATE_SIGS_S1[kind]:
+            sys.exit('ERROR patch_bytecode: %s update sub is not the one PS1SSObjUpdate %d transcribes' % (name, kind))
+        own[ptr - base:ptr - base + 4] = [op, 2, kind, end]
+        full[ptr:ptr + 4] = [op, 2, kind, end]
+        done.append(name)
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'special stage updates native: %s%s' % (', '.join(done) or '-', ' (already: %s)' % ', '.join(already) if already else '')
+
+
+# Sonic 1's zone objects' update subs (with their jump-table entries), transcribed by PS1S1ZoneObj kind.
+S1ZONEOBJ_SIGS = {
+    0: [  # Door
+        'switch 0 OBJECTSTATE',
+        'IfEqual 9 OBJECTPROPERTYVALUE 2',
+        'IfLower 11 OBJECTXPOS[1,0,0] OBJECTXPOS',
+        'Equal LOCAL[1,0,59874] 4',
+        'endif',
+        'endif',
+        'IfEqual 13 OBJECTVALUE0[2,0,1] 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'break',
+        'Sub OBJECTYPOS 131072',
+        'Dec OBJECTVALUE0',
+        'IfLower 15 OBJECTVALUE0 0',
+        'Inc OBJECTSTATE',
+        'IfEqual 17 OBJECTPROPERTYVALUE 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'endif',
+        'break',
+        'break',
+        'IfGreater 19 OBJECTXPOS[1,0,0] 287309824',
+        'Inc OBJECTSTATE',
+        'endif',
+        'break',
+        'Add OBJECTYPOS 131072',
+        'Inc OBJECTVALUE0',
+        'IfGreaterOrEqual 21 OBJECTVALUE0 32',
+        'Equal OBJECTSTATE 0',
+        'endif',
+        'break',
+        'endswitch',
+        'ForEachActive 23 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -32 8 32 ARRAYPOS6 65536 65536 65536 65536',
+        'next',
+        'End',
+        'JT 0 switch 0 4 @30 @31 @1 @10 @19 @20 @24',
+        'JT 1 IfEqual @5 @6',
+        'JT 2 IfLower @4 @5',
+        'JT 6 IfEqual @8 @9',
+        'JT 12 IfLower @17 @18',
+        'JT 14 IfEqual @16 @17',
+        'JT 20 IfGreater @22 @23',
+        'JT 26 IfGreaterOrEqual @28 @29',
+        'JT 31 ForEachActive @31 @34',
+    ],
+    1: [  # Door Horizontal
+        'switch 0 OBJECTSTATE',
+        'IfEqual 8 LOCAL[1,0,56375] 1',
+        'Equal OBJECTSTATE 1',
+        'endif',
+        'IfEqual 10 OBJECTVALUE0[2,0,1] 1',
+        'Inc OBJECTSTATE',
+        'endif',
+        'ForEachActive 12 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -64 -16 64 16 ARRAYPOS6 65536 65536 65536 65536',
+        'next',
+        'break',
+        'Equal TEMP0 OBJECTXPOS',
+        'And TEMP0 -65536',
+        'IfEqual 14 OBJECTDIRECTION 0',
+        'Sub OBJECTXPOS 131072',
+        'else',
+        'Add OBJECTXPOS 131072',
+        'endif',
+        'Dec OBJECTVALUE0',
+        'IfLower 16 OBJECTVALUE0 0',
+        'Inc OBJECTSTATE',
+        'endif',
+        'Equal OBJECTVALUE1 OBJECTXPOS',
+        'And OBJECTVALUE1 -65536',
+        'Sub OBJECTVALUE1 TEMP0',
+        'Equal TEMP1 OBJECTXPOS',
+        'Equal OBJECTXPOS TEMP0',
+        'ForEachActive 18 256 ARRAYPOS6',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -64 -16 64 16 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 20 CHECKRESULT 1',
+        'Add OBJECTXPOS[1,1,6] OBJECTVALUE1',
+        'endif',
+        'next',
+        'Equal OBJECTXPOS TEMP1',
+        'break',
+        'endswitch',
+        'End',
+        'JT 0 switch 0 3 @35 @36 @4 @11 @7 @1',
+        'JT 1 IfEqual @3 @4',
+        'JT 4 IfEqual @6 @7',
+        'JT 7 ForEachActive @7 @10',
+        'JT 13 IfEqual @16 @18',
+        'JT 19 IfLower @21 @22',
+        'JT 27 ForEachActive @27 @33',
+        'JT 29 IfEqual @31 @32',
+    ],
+    2: [  # Invisible Block
+        'Equal TEMP0 OBJECTVALUE0',
+        'FlipSign TEMP0',
+        'Equal TEMP1 OBJECTVALUE1',
+        'FlipSign TEMP1',
+        'switch 0 OBJECTSTATE',
+        'ForEachActive 7 256 ARRAYPOS6',
+        'IfNotEqual 9 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 1 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'switch 11 CHECKRESULT',
+        'Add TEMP0 2',
+        'Add TEMP1 2',
+        'Equal TEMP2 OBJECTVALUE0',
+        'Equal TEMP3 OBJECTVALUE1',
+        'Sub TEMP2 2',
+        'Sub TEMP3 2',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 TEMP2 TEMP3 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 20 CHECKRESULT 1',
+        'Equal OBJECTGRAVITY[1,1,6] 0',
+        'endif',
+        'break',
+        'IfEqual 22 OBJECTGRAVITY[1,1,6] 0',
+        'CallFunction 51',
+        'endif',
+        'break',
+        'endswitch',
+        'endif',
+        'next',
+        'break',
+        'ForEachActive 24 256 ARRAYPOS6',
+        'IfNotEqual 26 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 28 CHECKRESULT 1',
+        'IfEqual 30 OBJECTGRAVITY[1,1,6] 0',
+        'Equal OBJECTXPOS[1,1,6] OBJECTCOLLISIONRIGHT[1,1,6]',
+        'FlipSign OBJECTXPOS[1,1,6]',
+        'Sub OBJECTXPOS[1,1,6] OBJECTVALUE0',
+        'ShL OBJECTXPOS[1,1,6] 16',
+        'Add OBJECTXPOS[1,1,6] OBJECTXPOS',
+        'IfGreater 32 OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'break',
+        'ForEachActive 34 256 ARRAYPOS6',
+        'IfNotEqual 36 OBJECTSTATE[1,1,6] 24',
+        'BoxCollisionTest 0 OBJECTENTITYPOS TEMP0 TEMP1 OBJECTVALUE0 OBJECTVALUE1 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 38 CHECKRESULT 1',
+        'IfEqual 40 OBJECTGRAVITY[1,1,6] 0',
+        'Equal OBJECTXPOS[1,1,6] OBJECTCOLLISIONLEFT[1,1,6]',
+        'FlipSign OBJECTXPOS[1,1,6]',
+        'Add OBJECTXPOS[1,1,6] OBJECTVALUE0',
+        'ShL OBJECTXPOS[1,1,6] 16',
+        'Add OBJECTXPOS[1,1,6] OBJECTXPOS',
+        'IfLower 42 OBJECTSPEED[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 0',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'next',
+        'break',
+        'endswitch',
+        'End',
+        'JT 4 switch 0 2 @64 @65 @5 @28 @46',
+        'JT 5 ForEachActive @5 @27',
+        'JT 6 IfNotEqual @25 @26',
+        'JT 8 switch 0 4 @24 @25 @9 @24 @24 @24 @20',
+        'JT 16 IfEqual @18 @19',
+        'JT 20 IfEqual @22 @23',
+        'JT 28 ForEachActive @28 @45',
+        'JT 29 IfNotEqual @43 @44',
+        'JT 31 IfEqual @42 @43',
+        'JT 32 IfEqual @41 @42',
+        'JT 38 IfGreater @40 @41',
+        'JT 46 ForEachActive @46 @63',
+        'JT 47 IfNotEqual @61 @62',
+        'JT 49 IfEqual @60 @61',
+        'JT 50 IfEqual @59 @60',
+        'JT 56 IfLower @58 @59',
+    ],
+}
+S1ZONE_OBJS = (('Door', 0, ()), ('Door Horizontal', 1, ()), ('Invisible Block', 2, (51,)))
+
+
+def patch_s1_zone_objs(bcdir):
+    """Sonic 1's zone objects (S1ZONE_OBJS) -> PS1S1ZoneObj kind / End in every stage file whose update sub is exactly
+    S1ZONEOBJ_SIGS[kind] (with the jump-table entries) and whose script functions the native runs are callable."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1S1ZoneObj'), fn.index('End')
+    data = os.path.join(bcdir, '..', 'Data')
+    done, already = [], []
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode' or not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        objs = object_sheets.stage_config(data, folder)[2]
+        path = os.path.join(bcdir, f)
+        changed = False
+        for name, kind, calls in S1ZONE_OBJS:
+            if name not in objs:
+                continue
+            raw = open(path, 'rb').read()
+            own, p = bs.blocks(raw, 0)
+            rest = raw[p:]
+            full = bs.full_code(path)[0]
+            base = len(full) - len(own)
+            k = objs.index(name)
+            ptr = bs.load(path)[2][k][0]
+            if full[ptr] == op:
+                already.append('%s %s' % (folder, name))
+                continue
+            if sub_listing(path, k, 0, names, vars_)[3] != S1ZONEOBJ_SIGS[kind]:
+                continue
+            if calls and callable_from_native(path, calls):
+                continue
+            own[ptr - base:ptr - base + 4] = [op, 2, kind, end]
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+            done.append('%s %s' % (folder, name))
+    return 'PS1S1ZoneObj native in %s%s' % (', '.join(done) or '-', ' (already: %d)' % len(already) if already else '')
+
+
+# Sonic 1's Monitor update sub (GlobalCode "Monitor", with its jump-table entries): Sonic 2's MONITOR_SIG without
+# the random monitor and the per-player counters, its own animation globals (64 / 81 / 83) and temp object (18).
+MONITOR_SIG_S1 = [
+    'IfEqual 0 OBJECTSTATE 1',
+    'Add OBJECTYVEL 14336',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'IfGreaterOrEqual 2 OBJECTYVEL 0',
+    'ObjectTileCollision 0 0 16 0',
+    'IfEqual 4 CHECKRESULT 1',
+    'Equal OBJECTYVEL 0',
+    'Equal OBJECTSTATE 0',
+    'endif',
+    'endif',
+    'endif',
+    'ForEachActive 6 256 ARRAYPOS6',
+    'CheckGreater OBJECTYVEL[1,1,6] -1',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTGRAVITY[1,1,6] 0',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 8 TEMP0 1',
+    'CheckEqual OBJECTANIMATION[1,1,6] GLOBAL[1,0,64]',
+    'Equal TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTANIMATION[1,1,6] GLOBAL[1,0,81]',
+    'Or TEMP0 CHECKRESULT',
+    'CheckEqual OBJECTANIMATION[1,1,6] GLOBAL[1,0,83]',
+    'Or TEMP0 CHECKRESULT',
+    'IfEqual 10 TEMP0 1',
+    'IfEqual 12 OBJECTVALUE16[1,1,6] 0',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -16 -14 16 16 ARRAYPOS6 OBJECTVALUE40[1,1,6] OBJECTVALUE38[1,1,6] OBJECTVALUE41[1,1,6] OBJECTVALUE39[1,1,6]',
+    'IfEqual 14 CHECKRESULT 1',
+    'Equal OBJECTSTATE 0',
+    'CreateTempObject 18 0 OBJECTXPOS OBJECTYPOS',
+    'Equal OBJECTDRAWORDER[1,1,8] 4',
+    'Add OBJECTYVEL[1,1,6] OBJECTVALUE25[1,1,6]',
+    'Add OBJECTYVEL[1,1,6] OBJECTVALUE25[1,1,6]',
+    'FlipSign OBJECTYVEL[1,1,6]',
+    'Equal OBJECTTYPE 14',
+    'IfNotEqual 16 OBJECTPRIORITY 4',
+    'Equal OBJECTPRIORITY 1',
+    'endif',
+    'Equal OBJECTALPHA 255',
+    'Equal OBJECTVALUE0 OBJECTYPOS',
+    'Equal OBJECTVALUE1 -196608',
+    'PlaySfx 8 0',
+    'endif',
+    'else',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -15 -14 15 16 ARRAYPOS6 65536 65536 65536 65536',
+    'endif',
+    'else',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -15 -14 15 16 ARRAYPOS6 65536 65536 65536 65536',
+    'endif',
+    'else',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -15 -16 15 16 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 18 CHECKRESULT 4',
+    'Equal OBJECTSTATE 1',
+    'Equal OBJECTYVEL -131072',
+    'Equal OBJECTYVEL[1,1,6] 131072',
+    'endif',
+    'endif',
+    'next',
+    'End',
+    'JT 0 IfEqual @10 @11',
+    'JT 3 IfGreaterOrEqual @9 @10',
+    'JT 5 IfEqual @8 @9',
+    'JT 11 ForEachActive @11 @57',
+    'JT 16 IfEqual @49 @56',
+    'JT 23 IfEqual @46 @48',
+    'JT 24 IfEqual @43 @45',
+    'JT 26 IfEqual @41 @42',
+    'JT 34 IfNotEqual @36 @37',
+    'JT 50 IfEqual @54 @55',
+]
+
+
+# Sonic 1's Red / Yellow Spring update subs (GlobalCode, with their jump-table entries): PS1S1Spring kind 0 / 1.
+SPRING_SIGS_S1 = {
+    0: [  # Red Spring
+        'ForEachActive 0 256 ARRAYPOS6',
+        'switch 2 OBJECTPROPERTYVALUE',
+        'Equal TEMP0 OBJECTVALUE1',
+        'IfEqual 10 OBJECTGRAVITY[1,1,6] 1',
+        'Equal TEMP0 1',
+        'endif',
+        'IfGreater 12 OBJECTCOLLISIONMODE[1,1,6] 0',
+        'IfLower 14 OBJECTYVEL[1,1,6] 0',
+        'Equal TEMP0 1',
+        'endif',
+        'endif',
+        'IfEqual 16 TEMP0 0',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -10 14 -6 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 18 CHECKRESULT 1',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,59]',
+        'IfEqual 20 OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'IfEqual 22 OBJECTANIMATION[1,1,6] GLOBAL[1,0,62]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,62]',
+        'endif',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] -1048576',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'else',
+        'IfGreaterOrEqual 24 OBJECTYVEL[1,1,6] 0',
+        'BoxCollisionTest 3 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -10 14 -6 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 26 CHECKRESULT 1',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,59]',
+        'IfEqual 28 OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'IfEqual 30 OBJECTANIMATION[1,1,6] GLOBAL[1,0,62]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,62]',
+        'endif',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] -1048576',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -14 8 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 32 OBJECTGRAVITY[1,1,6] 0',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 6 -14 11 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 34 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTANGLE[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 1048576',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 0',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 12',
+        'PlaySfx 11 0',
+        'IfNotEqual 36 OBJECTSTATE[1,1,6] 13',
+        'Equal OBJECTSTATE[1,1,6] 10',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'endif',
+        'else',
+        'IfEqual 38 OBJECTVALUE7 1',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 6 -4 11 4 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 40 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTANGLE[1,1,6] 0',
+        'Equal OBJECTSPEED[1,1,6] 1048576',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 0',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 12',
+        'PlaySfx 11 0',
+        'IfNotEqual 42 OBJECTSTATE[1,1,6] 14',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'IfNotEqual 44 OBJECTANIMATION[1,1,6] GLOBAL[1,0,64]',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'Equal OBJECTANIMATIONSPEED OBJECTSPEED',
+        'Mul OBJECTANIMATIONSPEED[1,1,6] 80',
+        'Div OBJECTANIMATIONSPEED[1,1,6] 393216',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -14 8 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 46 OBJECTGRAVITY[1,1,6] 0',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -10 -14 -6 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 48 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] -1048576',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 1',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 50 OBJECTSTATE[1,1,6] 13',
+        'Equal OBJECTSTATE[1,1,6] 10',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'endif',
+        'else',
+        'IfEqual 52 OBJECTVALUE7 1',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -10 -14 -6 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 54 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] -1048576',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 1',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 56 OBJECTSTATE[1,1,6] 14',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'IfNotEqual 58 OBJECTANIMATION[1,1,6] GLOBAL[1,0,64]',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'Equal OBJECTANIMATIONSPEED OBJECTSPEED',
+        'FlipSign OBJECTANIMATIONSPEED[1,1,6]',
+        'Mul OBJECTANIMATIONSPEED[1,1,6] 80',
+        'Div OBJECTANIMATIONSPEED[1,1,6] 393216',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'IfLowerOrEqual 60 OBJECTYVEL[1,1,6] 0',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 6 14 10 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 62 CHECKRESULT 1',
+        'IfEqual 64 OBJECTCOLLISIONMODE[1,1,6] 2',
+        'FlipSign OBJECTSPEED[1,1,6]',
+        'FlipSign OBJECTXVEL[1,1,6]',
+        'endif',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] 1048576',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'endif',
+        'break',
+        'endswitch',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @167',
+        'JT 1 switch 0 3 @165 @166 @2 @57 @102 @146',
+        'JT 3 IfEqual @5 @6',
+        'JT 6 IfGreater @10 @11',
+        'JT 7 IfLower @9 @10',
+        'JT 11 IfEqual @33 @56',
+        'JT 14 IfEqual @31 @32',
+        'JT 16 IfEqual @18 @19',
+        'JT 19 IfEqual @21 @22',
+        'JT 33 IfGreaterOrEqual @54 @55',
+        'JT 36 IfEqual @53 @54',
+        'JT 38 IfEqual @40 @41',
+        'JT 41 IfEqual @43 @44',
+        'JT 58 IfEqual @76 @101',
+        'JT 60 IfEqual @74 @75',
+        'JT 70 IfNotEqual @73 @74',
+        'JT 76 IfEqual @99 @100',
+        'JT 78 IfEqual @98 @99',
+        'JT 89 IfNotEqual @97 @98',
+        'JT 91 IfNotEqual @93 @94',
+        'JT 103 IfEqual @120 @145',
+        'JT 105 IfEqual @118 @119',
+        'JT 114 IfNotEqual @117 @118',
+        'JT 120 IfEqual @143 @144',
+        'JT 122 IfEqual @142 @143',
+        'JT 132 IfNotEqual @141 @142',
+        'JT 134 IfNotEqual @136 @137',
+        'JT 147 IfLowerOrEqual @163 @164',
+        'JT 149 IfEqual @162 @163',
+        'JT 150 IfEqual @153 @154',
+    ],
+    1: [  # Yellow Spring
+        'ForEachActive 0 256 ARRAYPOS6',
+        'switch 2 OBJECTPROPERTYVALUE',
+        'Equal TEMP0 OBJECTVALUE1',
+        'IfEqual 10 OBJECTGRAVITY[1,1,6] 1',
+        'Equal TEMP0 1',
+        'endif',
+        'IfGreater 12 OBJECTCOLLISIONMODE[1,1,6] 0',
+        'IfLower 14 OBJECTYVEL[1,1,6] 0',
+        'Equal TEMP0 1',
+        'endif',
+        'endif',
+        'IfEqual 16 TEMP0 0',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -10 14 -6 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 18 CHECKRESULT 1',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,59]',
+        'IfEqual 20 OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'IfEqual 22 OBJECTANIMATION[1,1,6] GLOBAL[1,0,62]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,62]',
+        'endif',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] -655360',
+        'Add OBJECTYVEL[1,1,6] OBJECTVALUE2',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'else',
+        'IfGreaterOrEqual 24 OBJECTYVEL[1,1,6] 0',
+        'BoxCollisionTest 3 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 -10 14 -6 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 26 CHECKRESULT 1',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,59]',
+        'IfEqual 28 OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'IfEqual 30 OBJECTANIMATION[1,1,6] GLOBAL[1,0,62]',
+        'Equal OBJECTVALUE10[1,1,6] GLOBAL[1,0,62]',
+        'endif',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] -655360',
+        'Add OBJECTYVEL[1,1,6] OBJECTVALUE2',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -14 8 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 32 OBJECTGRAVITY[1,1,6] 0',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 6 -14 10 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 34 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] 655360',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 0',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 36 OBJECTSTATE[1,1,6] 13',
+        'Equal OBJECTSTATE[1,1,6] 10',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'endif',
+        'else',
+        'IfEqual 38 OBJECTVALUE7 1',
+        'BoxCollisionTest 0 OBJECTENTITYPOS 6 -4 11 4 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 40 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] 655360',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 0',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 42 OBJECTSTATE[1,1,6] 14',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'IfNotEqual 44 OBJECTANIMATION[1,1,6] GLOBAL[1,0,64]',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'Equal OBJECTANIMATIONSPEED OBJECTSPEED',
+        'Mul OBJECTANIMATIONSPEED[1,1,6] 80',
+        'Div OBJECTANIMATIONSPEED[1,1,6] 393216',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -8 -14 8 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 46 OBJECTGRAVITY[1,1,6] 0',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -10 -14 -6 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 48 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] -655360',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 1',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 50 OBJECTSTATE[1,1,6] 13',
+        'Equal OBJECTSTATE[1,1,6] 10',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'endif',
+        'else',
+        'IfEqual 52 OBJECTVALUE7 1',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -10 -14 -6 14 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 54 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] -655360',
+        'Equal OBJECTYVEL[1,1,6] 0',
+        'Equal OBJECTCOLLISIONMODE[1,1,6] 0',
+        'Equal OBJECTPUSHING[1,1,6] 0',
+        'Equal OBJECTDIRECTION[1,1,6] 1',
+        'Equal OBJECTCONTROLLOCK[1,1,6] 15',
+        'PlaySfx 11 0',
+        'IfNotEqual 56 OBJECTSTATE[1,1,6] 14',
+        'Equal OBJECTANIMATION[1,1,6] 11',
+        'IfNotEqual 58 OBJECTANIMATION[1,1,6] GLOBAL[1,0,64]',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,60]',
+        'endif',
+        'Equal OBJECTANIMATIONSPEED OBJECTSPEED',
+        'FlipSign OBJECTANIMATIONSPEED[1,1,6]',
+        'Mul OBJECTANIMATIONSPEED[1,1,6] 80',
+        'Div OBJECTANIMATIONSPEED[1,1,6] 393216',
+        'endif',
+        'endif',
+        'endif',
+        'endif',
+        'break',
+        'BoxCollisionTest 1 OBJECTENTITYPOS -14 -8 14 8 ARRAYPOS6 65536 65536 65536 65536',
+        'BoxCollisionTest 0 OBJECTENTITYPOS -14 6 14 10 ARRAYPOS6 65536 65536 65536 65536',
+        'IfEqual 60 CHECKRESULT 1',
+        'Equal OBJECTVALUE0 1',
+        'IfEqual 62 OBJECTCOLLISIONMODE[1,1,6] 2',
+        'FlipSign OBJECTSPEED[1,1,6]',
+        'FlipSign OBJECTXVEL[1,1,6]',
+        'endif',
+        'Equal OBJECTSTATE[1,1,6] 11',
+        'Equal OBJECTTILECOLLISIONS[1,1,6] 1',
+        'Equal OBJECTGRAVITY[1,1,6] 1',
+        'Equal OBJECTSPEED[1,1,6] OBJECTXVEL[1,1,6]',
+        'Equal OBJECTYVEL[1,1,6] 655360',
+        'Equal OBJECTVALUE1[1,1,6] 0',
+        'PlaySfx 11 0',
+        'endif',
+        'break',
+        'endswitch',
+        'next',
+        'End',
+        'JT 0 ForEachActive @0 @165',
+        'JT 1 switch 0 3 @163 @164 @2 @59 @102 @146',
+        'JT 3 IfEqual @5 @6',
+        'JT 6 IfGreater @10 @11',
+        'JT 7 IfLower @9 @10',
+        'JT 11 IfEqual @34 @58',
+        'JT 14 IfEqual @32 @33',
+        'JT 16 IfEqual @18 @19',
+        'JT 19 IfEqual @21 @22',
+        'JT 34 IfGreaterOrEqual @56 @57',
+        'JT 37 IfEqual @55 @56',
+        'JT 39 IfEqual @41 @42',
+        'JT 42 IfEqual @44 @45',
+        'JT 60 IfEqual @77 @101',
+        'JT 62 IfEqual @75 @76',
+        'JT 71 IfNotEqual @74 @75',
+        'JT 77 IfEqual @99 @100',
+        'JT 79 IfEqual @98 @99',
+        'JT 89 IfNotEqual @97 @98',
+        'JT 91 IfNotEqual @93 @94',
+        'JT 103 IfEqual @120 @145',
+        'JT 105 IfEqual @118 @119',
+        'JT 114 IfNotEqual @117 @118',
+        'JT 120 IfEqual @143 @144',
+        'JT 122 IfEqual @142 @143',
+        'JT 132 IfNotEqual @141 @142',
+        'JT 134 IfNotEqual @136 @137',
+        'JT 148 IfEqual @161 @162',
+        'JT 150 IfEqual @153 @154',
+    ],
+}
+
+
+def patch_s1_springs(bcdir):
+    """Sonic 1's springs -> PS1S1Spring kind / End (GlobalCode) when their update subs are exactly SPRING_SIGS_S1."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1S1Spring'), fn.index('End')
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    done = []
+    for kind, name in enumerate(('Red Spring', 'Yellow Spring')):
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        k = global_objects(bcdir).index(name)
+        start = bs.load(path)[2][k][0]
+        if code[start] == op:
+            done.append('%s already' % name)
+            continue
+        if sub_listing(path, k, 0, names, vars_)[3] != SPRING_SIGS_S1[kind]:
+            sys.exit('ERROR patch_bytecode: %s update sub is not the one PS1S1Spring transcribes' % name)
+        code[start:start + 4] = [op, 2, kind, end]
+        open(path, 'wb').write(encode(code) + rest)
+        assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+        done.append(name)
+    return 'PS1S1Spring native: %s' % ', '.join(done)
+
+
+# Labyrinth's LZ Setup update / draw subs (stage object, with their jump-table entries): PS1S1LZSetup 0 / 1.
+LZSETUP_SIGS_S1 = {
+    0: [
+        'Inc OBJECTVALUE0',
+        'IfGreater 0 OBJECTVALUE0 1',
+        'Inc TILELAYERDEFORMATIONOFFSETW[1,0,0]',
+        'Inc TILELAYERDEFORMATIONOFFSETW[1,0,1]',
+        'Equal OBJECTVALUE0 0',
+        'endif',
+        'Inc OBJECTVALUE1',
+        'IfEqual 2 OBJECTVALUE1 3',
+        'Equal OBJECTVALUE1 0',
+        'RotatePalette 0 171 174 0',
+        'RotatePalette 1 171 174 0',
+        'endif',
+        'IfGreater 4 OBJECTVALUE2 0',
+        'Dec OBJECTVALUE2',
+        'else',
+        'Inc OBJECTVALUE3',
+        'Mod OBJECTVALUE3 3',
+        'GetTableValue OBJECTVALUE2 OBJECTVALUE3 52321',
+        'RotatePalette 0 187 189 LOCAL[1,0,52319]',
+        'RotatePalette 1 187 189 LOCAL[1,0,52319]',
+        'endif',
+        'ForEachActive 6 256 ARRAYPOS6',
+        'Equal TEMP1 OBJECTXPOS[1,1,6]',
+        'ShR TEMP1 16',
+        'Equal TEMP2 OBJECTYPOS[1,1,6]',
+        'ShR TEMP2 16',
+        'Add TEMP2 OBJECTCOLLISIONBOTTOM[1,1,6]',
+        'Dec TEMP2',
+        'Get16x16TileInfo TEMP0 TEMP1 TEMP2 0',
+        'CheckEqual TEMP0 71',
+        'Equal TEMP3 CHECKRESULT',
+        'CheckEqual TEMP0 72',
+        'Or TEMP3 CHECKRESULT',
+        'IfEqual 8 TEMP3 1',
+        'CheckEqual OBJECTSTATE[1,1,6] 19',
+        'Equal TEMP3 CHECKRESULT',
+        'CheckEqual OBJECTSTATE[1,1,6] 20',
+        'Or TEMP3 CHECKRESULT',
+        'CheckEqual OBJECTSTATE[1,1,6] 23',
+        'Or TEMP3 CHECKRESULT',
+        'CheckEqual OBJECTSTATE[1,1,6] 24',
+        'Or TEMP3 CHECKRESULT',
+        'IfEqual 10 TEMP3 1',
+        'IfEqual 12 OBJECTSTATE[1,1,6] 19',
+        'FlipSign OBJECTXVEL[1,1,6]',
+        'FlipSign OBJECTSPEED[1,1,6]',
+        'endif',
+        'Equal OBJECTSTATE[1,1,6] 21',
+        'Equal OBJECTANIMATION[1,1,6] GLOBAL[1,0,82]',
+        'endif',
+        'endif',
+        'IfEqual 14 OBJECTGRAVITY[1,1,6] 0',
+        'Get16x16TileInfo TEMP0 TEMP1 TEMP2 8',
+        'IfEqual 16 TEMP0 1',
+        'Equal OBJECTSTATE[1,1,6] 34',
+        'Get16x16TileInfo TEMP0 TEMP1 TEMP2 1',
+        'switch 18 TEMP0',
+        'Equal OBJECTDIRECTION[1,1,6] 1',
+        'break',
+        'Equal OBJECTDIRECTION[1,1,6] 0',
+        'endswitch',
+        'endif',
+        'endif',
+        'next',
+        'IfEqual 26 OBJECTSTATE[1,0,0] 34',
+        'IfEqual 28 OBJECTVALUE4 0',
+        'IfEqual 30 OBJECTVALUE5 0',
+        'PlaySfx 50 0',
+        'StopSfx 51',
+        'Equal OBJECTVALUE5 1',
+        'else',
+        'StopSfx 50',
+        'PlaySfx 51 0',
+        'endif',
+        'endif',
+        'Inc OBJECTVALUE4',
+        'And OBJECTVALUE4 63',
+        'else',
+        'IfNotEqual 32 OBJECTVALUE4 0',
+        'Inc OBJECTVALUE4',
+        'And OBJECTVALUE4 63',
+        'else',
+        'Equal OBJECTVALUE4 0',
+        'Equal OBJECTVALUE5 0',
+        'endif',
+        'endif',
+        'IfGreater 34 LOCAL[1,0,52320] 0',
+        'Dec LOCAL[1,0,52320]',
+        'endif',
+        'End',
+        'JT 1 IfGreater @5 @6',
+        'JT 7 IfEqual @11 @12',
+        'JT 12 IfGreater @15 @21',
+        'JT 21 ForEachActive @21 @64',
+        'JT 33 IfEqual @50 @51',
+        'JT 42 IfEqual @49 @50',
+        'JT 43 IfEqual @46 @47',
+        'JT 51 IfEqual @62 @63',
+        'JT 53 IfEqual @61 @62',
+        'JT 56 switch 0 3 @60 @61 @57 @59 @57 @59',
+        'JT 64 IfEqual @78 @86',
+        'JT 65 IfEqual @74 @75',
+        'JT 66 IfEqual @71 @74',
+        'JT 78 IfNotEqual @82 @85',
+        'JT 86 IfGreater @88 @89',
+    ],
+    1: [
+        'Equal TEMP0 STAGEWATERLEVEL',
+        'Sub TEMP0 SCREENYOFFSET',
+        'IfLower 0 TEMP0 0',
+        'Equal TEMP0 0',
+        'endif',
+        'IfGreater 2 TEMP0 SCREENYSIZE',
+        'Equal TEMP0 SCREENYSIZE',
+        'endif',
+        'SetActivePalette 0 0 TEMP0',
+        'IfGreater 4 LOCAL[1,0,52320] 0',
+        'SetActivePalette 2 TEMP0 SCREENYSIZE',
+        'else',
+        'SetActivePalette 1 TEMP0 SCREENYSIZE',
+        'endif',
+        'End',
+        'JT 2 IfLower @4 @5',
+        'JT 5 IfGreater @7 @8',
+        'JT 9 IfGreater @12 @14',
+    ],
+}
+
+
+def patch_s1_lzsetup(bcdir):
+    """Labyrinth's LZ Setup subs -> PS1S1LZSetup sub / End in every stage file with the object whose subs are exactly
+    LZSETUP_SIGS_S1 (with the jump-table entries)."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1S1LZSetup'), fn.index('End')
+    data = os.path.join(bcdir, '..', 'Data')
+    done = []
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode' or not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        objs = object_sheets.stage_config(data, folder)[2]
+        if 'LZ Setup' not in objs:
+            continue
+        path = os.path.join(bcdir, f)
+        k = objs.index('LZ Setup')
+        for sub in (0, 1):
+            raw = open(path, 'rb').read()
+            own, p = bs.blocks(raw, 0)
+            rest = raw[p:]
+            full = bs.full_code(path)[0]
+            base = len(full) - len(own)
+            ptr = bs.load(path)[2][k][sub]
+            if full[ptr] == op or sub_listing(path, k, sub, names, vars_)[3] != LZSETUP_SIGS_S1[sub]:
+                continue
+            own[ptr - base:ptr - base + 4] = [op, 2, sub, end]
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+            done.append('%s sub %d' % (folder, sub))
+    return 'PS1S1LZSetup native in %s' % (', '.join(done) or '-')
+
+
+def s1_patches():
+    """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
+    for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
+    written (phase 2b)."""
+    return (('oscillate', patch_oscillate),
+            ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
+            ('entitylayout', lambda d: patch_entity_layout(d, ENTITY_BOUND_SITES_S1)),
+            ('clearall', lambda d: patch_clear_all(d, CLEARALL_SITES_S1)),
+            ('backpause', lambda d: patch_back_pause(d, s1=True)),  # before playerinput: its signature has the patched If
+            ('playerinput', lambda d: patch_player_input(d, PLAYERINPUT_FN_SIG_S1)),
+            ('playerphys', lambda d: patch_player_physics(d, PLAYERFN_SIGS_S1)),
+            ('hud', lambda d: patch_global_function(d, HUD_FN_SIG_S1, 'PS1HUDDraw')),
+            ('tailsai', lambda d: patch_tails_ai(d, TAILSFN_SIGS_S1, PLAYERFN_SIGS_S1[6])),
+            ('ring', lambda d: patch_global_sub(d, 'Ring', 0, RING_SIG_S1, 'PS1Ring')),
+            ('monitor', lambda d: patch_global_sub(d, 'Monitor', 0, MONITOR_SIG_S1, 'PS1Monitor', with_jumps=True)),
+            ('springs', patch_s1_springs),
+            ('lzsetup', patch_s1_lzsetup),
+            ('zoneobjs', patch_s1_zone_objs),
+            ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG_S1, 'PS1StageSetup', with_jumps=True,
+                                                      calls=(71, 51))),
+            ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),
+            ('ssblockupdate', patch_ss_block_update),  # before ssblockcollide: it checks function 10's signature
+            ('ssupdates', patch_ss_updates),  # before ssblockcollide too
+            ('ssblockdraw', patch_ss_block_draw),  # before ssrotpos: it checks function 9's signature
+            ('ssdraws', patch_ss_draws),  # before ssrotpos too
+            ('ssrotpos', lambda d: patch_stage_function(d, 'Special', 9, SSROTPOS_FN_SIG_S1, 'PS1SSRotPos')),
+            ('ssblockcollide', lambda d: patch_stage_function(d, 'Special', 10, SSBLOCKCOLLIDE_FN_SIG_S1, 'PS1SSBlockCollide')))
+
+
 def main():
-    bcdir = sys.argv[1]
+    args = sys.argv[1:]
+    game = '2'
+    if '--game' in args:
+        i = args.index('--game'); game = args[i + 1]; del args[i:i + 2]
+    bcdir = args[0]
     only = os.environ.get('PS1_PATCH_ONLY')  # tests: e.g. "oscillate" (a comma list of the patch names below)
+    if game == '1':
+        for name, fn in s1_patches():
+            if not only or name in only.split(','):
+                print('%s: %s' % (name, fn(bcdir)))
+        return
     for name, fn in (('oscillate', patch_oscillate), ('ring', patch_ring),
                      ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
                      ('losering', lambda d: patch_global_sub(d, 'Lose Ring', 0, LOSERING_SIG, 'PS1LoseRing')),

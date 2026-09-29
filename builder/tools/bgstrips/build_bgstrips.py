@@ -32,8 +32,19 @@ A piece starts at a 64-halfword column (texture page pageX = vramX / 64, u = 0) 
 256-row page (v = vramY & 255); pieces split the period into <= 256-texel parts.
 Self-check: the file is decoded back and every stored line compared with the tile render.
 
-Usage: build_bgstrips.py DATA_DIR [--stage NAME]   (DATA_DIR: the disc tree's Data/, which holds the atlases and
-       16x16Tiles.vram; ZoneM is not there)
+Sonic 1 (--game 1, docs/37 phase 3): 'BGS3' files. Green Hill's BG is 8,192 texels wide without a repeat and its water
+gives every line its own X scroll (~100 tile bands a frame), but its rows are built from a handful of 256-texel segments
+and use <= 13 colours. So a region's period is a map of up to 32 256-texel pieces, and pieces with the same content share
+one VRAM spot (stored once); a row of <= 15 colours is stored 4-bit, with its own CLUT (16 master palette indices, a
+free atlas CLUT slot in rows 240-241: the renderer fills it with the palette like the atlas' CLUTs).
+  char[4] 'BGS3', u16 regionCount, u16 clutCount
+  clut (20 B): u16 vramX, u16 vramY, u8 map[16] (map[0] = 0: transparent)
+  region (202 B): as BGS2's but 32 pieces, and byte 9 = flags: bit 0 = 4-bit, bits 1-7 = CLUT (file order)
+  then per region, per piece whose spot no earlier piece of the region uses: lines rows x (width | width / 2) bytes
+  (4-bit: two texels a byte, the first in the low nibble).
+
+Usage: build_bgstrips.py DATA_DIR [--stage NAME] [--game 1|2]   (DATA_DIR: the disc tree's Data/, which holds the atlases
+       and 16x16Tiles.vram; ZoneM is not there)
 """
 import os, struct, sys
 import numpy as np
@@ -44,6 +55,15 @@ MAX_REGIONS = 32  # ps1/render.cpp PS1_STRIP_MAX
 MAX_PIECES = 9  # widest Sonic CD BG period: 2304 texels (R83C/D)
 REGION_BYTES = 10 + 6 * MAX_PIECES
 PLAYERS = (('', ''), ('_t', '_t'), ('_k', '_k'), ('_st', '_st'))  # (atlas suffix, strips suffix)
+
+
+SEG_PIECES = 32  # BGS3 (Sonic 1): ps1/render.cpp PS1_STRIP_PIECES with PS1_GAME == 1
+SEG_REGION_BYTES = 10 + 6 * SEG_PIECES
+SEG_W = 256      # texels per piece
+# 4-bit CLUT slots the atlas may leave free (tools/atlas/build_atlas.py CLUT_SLOTS, first rows): rows 240-241 keep the
+# renderer's two-bank split (ps1/render.cpp PS1SplitFits)
+SEG_CLUT_SLOTS = [(x, 240) for x in range(256, 320, 16)] + [(x, 241) for x in range(0, 320, 16)]
+MAX_CLUTS = 64   # ps1/sprite_atlas.hh PS1_ATLAS_MAX_CLUTS: atlas + strip CLUTs
 
 
 class StripError(Exception):
@@ -339,6 +359,274 @@ def build_stage(data, name, atlas_suffix):
     return bytes(out), '%-7s regions %2d | %s | VRAM %6d hw | file %6d B' % (name, len(regions), '; '.join(summary) or 'no HScroll BG', vram, len(out))
 
 
+def render_rows(gfx, tiles, L, plane, period):
+    """The layer plane's lines [0, ysize * 128) over one period, as render_line draws them (numpy, tile by tile)."""
+    out = np.zeros((L['ysize'] * 128, period), np.uint8)
+    for cy in range(L['ysize']):
+        for cx in range(period // 128):
+            ch = L['tiles'][cy][cx]
+            for k in range(64):
+                tile, d, pl = tiles[(ch << 6) + k]
+                if pl != plane:
+                    continue
+                g = gfx[tile]
+                if d & 1:
+                    g = g[:, ::-1]
+                if d & 2:
+                    g = g[::-1, :]
+                y, x = cy * 128 + (k >> 3) * 16, cx * 128 + (k & 7) * 16
+                out[y:y + 16, x:x + 16] = g
+    return out
+
+
+def atlas_clut_slots(atl_path):
+    """VRAM positions of the atlas' 4-bit CLUTs (their count and slots)."""
+    if not os.path.exists(atl_path):
+        return []
+    d = open(atl_path, 'rb').read()
+    _, ns, nc, ncl = struct.unpack_from('<4sHHH', d, 0)
+    o = 20 + ns * 56 + nc * 16
+    return [struct.unpack_from('<HH', d, o + 20 * k) for k in range(ncl)]
+
+
+def build_stage_seg(data, name, atlas_suffix, cache):
+    """BGS3 (Sonic 1): segment-mapped strips, 4-bit rows where they fit (docstring). cache: renders shared by the
+    player variants."""
+    sdir = os.path.join(data, 'Stages', name)
+    if not os.path.exists(os.path.join(sdir, 'Backgrounds.bin')):
+        return None, '%-7s no Backgrounds.bin' % name
+    layers = load_backgrounds(sdir)
+    cfgs = act_layers(sdir)
+    gfx, tiles = load_tiles(sdir)
+    atl = os.path.join(data, 'Sprites', 'Atlas', name + atlas_suffix + '.atl')
+    slots = [(slot, li, mid) for active, mid in cfgs for slot, li in enumerate(active)]
+    spairs, smids = script_layers(data, name)
+    slots += [(slot, li, mid) for slot, li in sorted(spairs) for mid in sorted({m for _, m in cfgs} | smids)]
+    jobs, wide = [], []
+    for slot, li, mid in slots:
+        if not (1 <= li < 9 and li in layers and layers[li]['type'] == 1 and layers[li]['xsize'] and layers[li]['ysize']):
+            continue
+        key = (li, 1 if slot >= mid else 0)
+        if key in [(j['layer'], j['plane']) for j in jobs] + wide:
+            continue
+        L = layers[li]
+        p = period_chunks(L) * 128
+        pieces = [min(SEG_W, p - s) for s in range(0, p, SEG_W)]
+        if len(pieces) > SEG_PIECES:
+            wide.append(key)
+            continue
+        full_h = L['ysize'] * 128
+        ls = L['lineScroll'][:full_h]
+        thin = set()
+        i = 0
+        while i < full_h:
+            j = i
+            while j < full_h and ls[j] == ls[i]:
+                j += 1
+            if j - i < 16:
+                thin.update(range(i >> 4, ((j - 1) >> 4) + 1))
+            i = j
+        df = L['deform']
+        thin.update(y >> 4 for y in range(full_h) if ls[y] < len(df) and df[ls[y]])
+        ck = (name, li, key[1])
+        if ck not in cache:
+            cache[ck] = render_rows(gfx, tiles, L, key[1], p)
+        img = cache[ck]
+        offs = [sum(pieces[:k]) for k in range(len(pieces))]
+        rinfo = []
+        for r in range(full_h >> 4):
+            blk = img[r * 16:r * 16 + 16]
+            cols = sorted(set(np.unique(blk).tolist()) - {0})
+            groups, gid, gw = {}, [], []
+            for k, w in enumerate(pieces):
+                g = (w, blk[:, offs[k]:offs[k] + w].tobytes())
+                if g not in groups:
+                    groups[g] = len(groups)
+                    gw.append(w)
+                gid.append(groups[g])
+            bits4 = len(cols) <= 15
+            rinfo.append(dict(cols=cols, bits4=bits4, gid=tuple(gid), gw=gw,
+                              hw=[w // 4 if bits4 else w // 2 for w in gw]))
+        jobs.append(dict(layer=li, plane=key[1], L=L, period=p, pieces=pieces, offs=offs, rows=full_h >> 4, thin=thin,
+                         img=img, rinfo=rinfo))
+
+    # Select rows (thin first, then nearest to a thin row) while their distinct segments fit, then place the selected
+    # rows in line order, each group under the same group of the row above when it can (contiguous regions).
+    cands = []
+    for ji, j in enumerate(jobs):
+        for r in range(j['rows']):
+            d = 0 if r in j['thin'] else (min(abs(r - t) for t in j['thin']) if j['thin'] else 1000 + r)
+            cands.append((d, ji, r))
+    cands.sort()
+    used = free_grid(atl)
+    selected = set()
+    for d, ji, r in cands:
+        spots = []
+        for hw in jobs[ji]['rinfo'][r]['hw']:
+            s = alloc(used, hw, 16)
+            if not s:
+                break
+            used[s[1]:s[1] + 16, s[0]:s[0] + hw] = 1
+            spots.append((s, hw))
+        if len(spots) == len(jobs[ji]['rinfo'][r]['hw']):
+            selected.add((ji, r))
+        else:
+            for (x, y), hw in spots:
+                used[y:y + 16, x:x + hw] = 0
+    def place(selected):
+        """Regions from the selected rows: runs of consecutive rows with the same segment grouping and depth, <= 15
+        colours together (4-bit) and <= 16 rows (one texture page row), each group's spot allocated as one tall rect
+        (the run shrinks from its end until every group fits)."""
+        used = free_grid(atl)
+        regions = []
+        for ji, j in enumerate(jobs):
+            r = 0
+            while r < j['rows']:
+                if (ji, r) not in selected:
+                    r += 1
+                    continue
+                start, ri = r, j['rinfo'][r]
+                cols = set(ri['cols'])
+                r += 1
+                while (ji, r) in selected and r - start < 16:
+                    rn = j['rinfo'][r]
+                    if rn['gid'] != ri['gid'] or rn['bits4'] != ri['bits4'] or (ri['bits4'] and len(cols | set(rn['cols'])) > 15):
+                        break
+                    cols |= set(rn['cols'])
+                    r += 1
+                n = r - start
+                while n:
+                    spots = []
+                    for hw in ri['hw']:
+                        s = alloc(used, hw, 16 * n)
+                        if not s:
+                            break
+                        used[s[1]:s[1] + 16 * n, s[0]:s[0] + hw] = 1
+                        spots.append(s)
+                    if len(spots) == len(ri['hw']):
+                        break
+                    for (x, y), hw in zip(spots, ri['hw']):
+                        used[y:y + 16 * n, x:x + hw] = 0
+                    n -= 1
+                if not n:  # not even one row fits here: drawn with tiles
+                    r = start + 1
+                    continue
+                cols = set()
+                for k in range(start, start + n):
+                    cols |= set(j['rinfo'][k]['cols'])
+                regions.append(dict(job=j, line0=start * 16, lines=n * 16, spots=spots, gid=ri['gid'], gw=ri['gw'],
+                                    bits4=ri['bits4'], cols=sorted(cols)))
+                r = start + n
+        chosen = {(jobs.index(g['job']), g['line0'] // 16 + k) for g in regions for k in range(g['lines'] // 16)}
+        return chosen, regions
+
+    # Too many regions (each row set of a layer can need its own): drop the lowest-priority rows until they fit.
+    order = [(ji, r) for _, ji, r in cands if (ji, r) in selected]
+    chosen, regions = place(selected)
+    while len(regions) > MAX_REGIONS:
+        selected.discard(order.pop())
+        chosen, regions = place(selected)
+
+    # 4-bit CLUTs in the CLUT slots the atlas leaves free: the regions' colour sets packed into shared maps of <= 15
+    # colours (largest sets first, each into the open map it overlaps most).
+    aslots = atlas_clut_slots(atl)
+    free_slots = [s for s in SEG_CLUT_SLOTS if s not in aslots]
+    bins = []  # colour sets
+    for g in sorted((g for g in regions if g['bits4']), key=lambda g: -len(g['cols'])):
+        fit = [(len(b & set(g['cols'])), k) for k, b in enumerate(bins) if len(b | set(g['cols'])) <= 15]
+        if fit:
+            k = max(fit)[1]
+            bins[k] |= set(g['cols'])
+        else:
+            k = len(bins)
+            bins.append(set(g['cols']))
+        g['clut'] = k
+    maps = [[0] + sorted(b) + [0] * (15 - len(b)) for b in bins]
+    for g in regions:
+        if g['bits4']:
+            g['cols'] = sorted(bins[g['clut']])  # texel values index the shared map
+    if len(maps) > len(free_slots) or len(maps) + len(aslots) > MAX_CLUTS:
+        raise StripError('%s: %d strip CLUTs, %d free slots' % (name, len(maps), len(free_slots)))
+
+    out = bytearray(b'BGS3' + struct.pack('<HH', len(regions), len(maps)))
+    for k, m in enumerate(maps):
+        out += struct.pack('<HH', *free_slots[k]) + bytes(m)
+    blob = bytearray()
+    for g in regions:
+        j = g['job']
+        flags = (1 | (g['clut'] << 1)) if g['bits4'] else 0
+        ent = struct.pack('<BBHHHBB', j['layer'], j['plane'], g['line0'], g['lines'], j['period'], len(j['pieces']), flags)
+        for k in range(SEG_PIECES):
+            ent += struct.pack('<HHH', *(g['spots'][g['gid'][k]] + (j['pieces'][k],))) if k < len(j['pieces']) else \
+                struct.pack('<HHH', 0, 0, 0)
+        assert len(ent) == SEG_REGION_BYTES
+        out += ent
+        rows = j['img'][g['line0']:g['line0'] + g['lines']]
+        lut = np.zeros(256, np.uint8)
+        if g['bits4']:
+            for i, c in enumerate(g['cols']):
+                lut[c] = i + 1
+        done = set()
+        for k, w in enumerate(j['pieces']):
+            if g['gid'][k] in done:
+                continue
+            done.add(g['gid'][k])
+            px = rows[:, j['offs'][k]:j['offs'][k] + w]
+            if g['bits4']:
+                q = lut[px]
+                blob += (q[:, 0::2] | (q[:, 1::2] << 4)).astype(np.uint8).tobytes()
+            else:
+                blob += px.tobytes()
+    out += blob
+    check_seg(bytes(out), regions, gfx, tiles, name, cache)
+
+    summary = []
+    for j in jobs:
+        rows = sorted(r for (ji, r) in chosen if jobs[ji] is j)
+        n4 = sum(1 for r in rows if j['rinfo'][r]['bits4'])
+        summary.append('L%d/p%d period %d: %d/%d rows (%d 4-bit, thin %d)' % (j['layer'], j['plane'], j['period'], len(rows),
+                                                                             j['rows'], n4, len(j['thin'])))
+    vram = sum(g['lines'] * sum(w // 4 if g['bits4'] else w // 2 for w in g['gw']) for g in regions)
+    summary += ['L%d/p%d too wide (tiles)' % k for k in wide]
+    return bytes(out), '%-7s regions %2d cluts %d | %s | VRAM %6d hw | file %6d B' % (
+        name, len(regions), len(maps), '; '.join(summary) or 'no HScroll BG', vram, len(out))
+
+
+def check_seg(blob, regions, gfx, tiles, name, cache):
+    """Decode a BGS3 file back and compare every stored line with render_line (the reference renderer)."""
+    count, nclut = struct.unpack_from('<HH', blob, 4)
+    maps = [blob[8 + 20 * k + 4:8 + 20 * k + 20] for k in range(nclut)]
+    base = 8 + 20 * nclut
+    off = base + count * SEG_REGION_BYTES
+    for i, g in enumerate(regions):
+        e = blob[base + i * SEG_REGION_BYTES:base + (i + 1) * SEG_REGION_BYTES]
+        layer, plane, line0, lines, period, npieces, flags = struct.unpack_from('<BBHHHBB', e, 0)
+        pcs = [struct.unpack_from('<HHH', e, 10 + 6 * k) for k in range(npieces)]
+        spot = {}
+        for x, y, w in pcs:
+            if (x, y) in spot:
+                continue
+            n = w // 2 if flags & 1 else w
+            spot[(x, y)] = [blob[off + r * n:off + (r + 1) * n] for r in range(lines)]
+            off += n * lines
+        for r in range(lines):
+            ln = bytearray()
+            for x, y, w in pcs:
+                row = spot[(x, y)][r]
+                if flags & 1:
+                    m = maps[flags >> 1]
+                    for b in row:
+                        ln += bytes((m[b & 15], m[b >> 4]))
+                else:
+                    ln += row
+            ref = cache.setdefault(('line', name, layer, plane, line0 + r),
+                                   render_line(gfx, tiles, g['job']['L'], plane, line0 + r, period))
+            if bytes(ln) != ref:
+                raise StripError('%s: BGS3 self-check failed (layer %d line %d)' % (name, layer, line0 + r))
+    if off != len(blob):
+        raise StripError('%s: BGS3 size mismatch' % name)
+
+
 def check(blob, regions, gfx, tiles, name):
     """Decode the file back and compare every stored line with the tile render."""
     count, = struct.unpack_from('<H', blob, 4)
@@ -364,11 +652,13 @@ def main():
         print(__doc__)
         sys.exit(1)
     data = args[0]
+    seg = '--game' in args and args[args.index('--game') + 1] == '1'
     names = [args[args.index('--stage') + 1]] if '--stage' in args else sorted(os.listdir(os.path.join(data, 'Stages')))
+    cache = {}
     for name in names:
         for atlas_suffix, out_suffix in PLAYERS:
             try:
-                blob, report = build_stage(data, name, atlas_suffix)
+                blob, report = build_stage_seg(data, name, atlas_suffix, cache) if seg else build_stage(data, name, atlas_suffix)
             except StripError as e:
                 print('ERROR', e)
                 sys.exit(1)
