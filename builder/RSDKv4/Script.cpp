@@ -10165,6 +10165,180 @@ bool PS1S1TopSub(int p)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+// Direct operands (docs/30 "Script VM direct operands", 2026-10-09; the Sonic CD port's technique, RSDKv3-ps1 26fbd15,
+// in int16 slots). The VM decodes every variable operand twice per instruction (fetch, then write-back): its array
+// form, then a switch over ~250 variables. Most operands are plain storage -- the temps, the check result, the array
+// positions, a global with a constant index, or a field of the running entity / one a constant away / one with a
+// constant index -- and after a stage's scripts are in place they are rewritten into a direct form of the same length
+// (jump offsets unchanged): slot 0 = PS1_DIRECT | long form (5 slots, else 3) | base << 2 | width, slot 1 = a byte
+// offset (entity field / script engine) or the global's index, slot 2 = the entity's delta from objectEntityPos or its
+// constant index. ProcessScript reads / writes them with one load / store through the same accessors (PS1_OBJ: the
+// same out-of-range scratch and count). Exact: only variables whose read is the plain field and whose write-back is the
+// plain store of the same field are converted, at the field's width and signedness; the rest keeps the generic path.
+// Only code walked from each sub's start to its End and each function's start to its top-level return is touched
+// (tables live in the code array between them); a rewritten operand is recognised and skipped on a later walk.
+// g_ps1DirectOn = 0 (GDB, before the stage loads) keeps every operand generic: the same-build A/B.
+#define PS1_DIRECT      16
+#define PS1_DIRECT_LONG 32
+enum { PS1_DW_INT = 0, PS1_DW_U8 = 1, PS1_DW_S8 = 2, PS1_DW_U16 = 3 };            // widths
+enum { PS1_DB_REL = 0, PS1_DB_ABS = 1, PS1_DB_ENG = 2, PS1_DB_GLOBAL = 3 };       // bases
+volatile uint32_t g_ps1DirectOn = 1;
+volatile uint32_t g_ps1DirectOperands = 0, g_ps1GenericOperands = 0, g_ps1DirectWalks = 0; // the last load's rewrite
+// An entity variable whose fetch and write-back are the plain field: its byte offset and width.
+static bool PS1DirectEntityField(int var, int *off, int *width)
+{
+    *width = PS1_DW_U8;
+    switch (var) {
+#define PS1_DF(v, f, w) \
+    case v: *off = (int)offsetof(Entity, f), *width = w; return true;
+        PS1_DF(VAR_OBJECTXPOS, xpos, PS1_DW_INT) PS1_DF(VAR_OBJECTYPOS, ypos, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTXVEL, xvel, PS1_DW_INT) PS1_DF(VAR_OBJECTYVEL, yvel, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTSPEED, speed, PS1_DW_INT) PS1_DF(VAR_OBJECTSTATE, state, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTANGLE, angle, PS1_DW_INT) PS1_DF(VAR_OBJECTSCALE, scale, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTROTATION, rotation, PS1_DW_INT) PS1_DF(VAR_OBJECTALPHA, alpha, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTANIMATIONTIMER, animationTimer, PS1_DW_INT) PS1_DF(VAR_OBJECTANIMATIONSPEED, animationSpeed, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTLOOKPOSX, lookPosX, PS1_DW_INT) PS1_DF(VAR_OBJECTLOOKPOSY, lookPosY, PS1_DW_INT)
+        PS1_DF(VAR_OBJECTGROUPID, groupID, PS1_DW_U16)
+        PS1_DF(VAR_OBJECTTYPE, type, PS1_DW_U8) PS1_DF(VAR_OBJECTPROPERTYVALUE, propertyValue, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTPRIORITY, priority, PS1_DW_U8) PS1_DF(VAR_OBJECTDRAWORDER, drawOrder, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTDIRECTION, direction, PS1_DW_U8) PS1_DF(VAR_OBJECTINKEFFECT, inkEffect, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTANIMATION, animation, PS1_DW_U8) PS1_DF(VAR_OBJECTPREVANIMATION, prevAnimation, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTFRAME, frame, PS1_DW_U8) PS1_DF(VAR_OBJECTCOLLISIONMODE, collisionMode, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTCOLLISIONPLANE, collisionPlane, PS1_DW_U8) PS1_DF(VAR_OBJECTCONTROLMODE, controlMode, PS1_DW_S8)
+        PS1_DF(VAR_OBJECTCONTROLLOCK, controlLock, PS1_DW_U8) PS1_DF(VAR_OBJECTPUSHING, pushing, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTVISIBLE, visible, PS1_DW_U8) PS1_DF(VAR_OBJECTTILECOLLISIONS, tileCollisions, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTINTERACTION, objectInteractions, PS1_DW_U8) PS1_DF(VAR_OBJECTGRAVITY, gravity, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTLEFT, left, PS1_DW_U8) PS1_DF(VAR_OBJECTRIGHT, right, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTUP, up, PS1_DW_U8) PS1_DF(VAR_OBJECTDOWN, down, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTJUMPPRESS, jumpPress, PS1_DW_U8) PS1_DF(VAR_OBJECTJUMPHOLD, jumpHold, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTSCROLLTRACKING, scrollTracking, PS1_DW_U8)
+        PS1_DF(VAR_OBJECTFLOORSENSORL, floorSensors[0], PS1_DW_U8) PS1_DF(VAR_OBJECTFLOORSENSORC, floorSensors[1], PS1_DW_U8)
+        PS1_DF(VAR_OBJECTFLOORSENSORR, floorSensors[2], PS1_DW_U8) PS1_DF(VAR_OBJECTFLOORSENSORLC, floorSensors[3], PS1_DW_U8)
+        PS1_DF(VAR_OBJECTFLOORSENSORRC, floorSensors[4], PS1_DW_U8)
+#undef PS1_DF
+        default: break;
+    }
+    if (var >= VAR_OBJECTVALUE0 && var <= VAR_OBJECTVALUE47) {
+        *off = (int)offsetof(Entity, values) + 4 * (var - VAR_OBJECTVALUE0), *width = PS1_DW_INT;
+        return true;
+    }
+    return false;
+}
+static_assert(sizeof(((Entity *)0)->type) == 1 && sizeof(((Entity *)0)->controlMode) == 1 && sizeof(((Entity *)0)->groupID) == 2
+                  && sizeof(((Entity *)0)->xpos) == 4 && sizeof(Entity) < 0x7FFF,
+              "direct operand field widths");
+// Rewrites the operand at slot p if it qualifies; returns its length in slots (<= 0: not an operand).
+static int PS1DirectOperand(int p)
+{
+    short *c = &scriptCode.slot[p];
+    if (c[0] >= PS1_DIRECT)
+        return (c[0] & PS1_DIRECT_LONG) ? 5 : 3; // already direct
+    if (c[0] == SCRIPTVAR_INTCONST)
+        return 2;
+    if (c[0] == SCRIPTVAR_STRCONST)
+        return scriptCode[p + 1] / 4 + 3;
+    if (c[0] != SCRIPTVAR_VAR)
+        return 0;
+    int arr = c[1], len = 3, reg = 0, idx = 0;
+    if (arr == VARARR_ARRAY || arr == VARARR_ENTNOPLUS1 || arr == VARARR_ENTNOMINUS1) {
+        reg = c[2] == 1, len = 5;
+        if (c[3] == PS1_SCRIPT_BIG)
+            reg = 1; // a big constant index: keep it generic
+        idx = c[3];
+    }
+    else if (arr != VARARR_NONE)
+        return 0;
+    int var = c[len - 1], base = -1, width = PS1_DW_INT, a = 0, b = 0, off;
+    if (var >= VAR_TEMP0 && var <= VAR_TEMP7 && arr == VARARR_NONE)
+        base = PS1_DB_ENG, a = (int)(offsetof(ScriptEngine, temp) + 4 * (var - VAR_TEMP0));
+    else if (var == VAR_CHECKRESULT && arr == VARARR_NONE)
+        base = PS1_DB_ENG, a = (int)offsetof(ScriptEngine, checkResult);
+    else if (var >= VAR_ARRAYPOS0 && var <= VAR_ARRAYPOS7 && arr == VARARR_NONE)
+        base = PS1_DB_ENG, a = (int)(offsetof(ScriptEngine, arrayPosition) + 4 * (var - VAR_ARRAYPOS0));
+    else if (var == VAR_GLOBAL && arr == VARARR_ARRAY && !reg && idx >= 0 && idx < GLOBALVAR_COUNT)
+        base = PS1_DB_GLOBAL, a = idx;
+    else if (!reg && PS1DirectEntityField(var, &off, &width)) {
+        a = off;
+        if (arr == VARARR_ARRAY) {
+            if (idx >= 0 && idx < ENTITY_COUNT)
+                base = PS1_DB_ABS, b = idx;
+        }
+        else
+            base = PS1_DB_REL, b = arr == VARARR_ENTNOPLUS1 ? idx : arr == VARARR_ENTNOMINUS1 ? -idx : 0;
+    }
+    if (base < 0 || b < -0x7FFF || b > 0x7FFF) {
+        g_ps1GenericOperands = g_ps1GenericOperands + 1;
+        return len;
+    }
+    c[0] = (short)(PS1_DIRECT | (len == 5 ? PS1_DIRECT_LONG : 0) | base << 2 | width);
+    c[1] = (short)a;
+    c[2] = (short)b;
+    g_ps1DirectOperands = g_ps1DirectOperands + 1;
+    return len;
+}
+// One sub (to its End) or function (to its top-level return) from `start`.
+static void PS1DirectOperandsFrom(int start, bool function)
+{
+    int p = start, depth = 0;
+    while (p >= 0 && p < scriptCodePos) {
+        int op = PS1_RAW(p++);
+        if ((uint)op >= FUNC_MAX_CNT)
+            return;
+        for (int i = 0, n = s_ps1OpSize[op]; i < n; ++i) {
+            int len = PS1DirectOperand(p);
+            if (len <= 0)
+                return; // not an operand: stop (nothing after it is touched)
+            p += len;
+        }
+        switch (op) {
+            case FUNC_END: return;
+            case FUNC_RETURN:
+                if (function && depth <= 0)
+                    return;
+                break;
+            case FUNC_IFEQUAL: case FUNC_IFGREATER: case FUNC_IFGREATEROREQUAL: case FUNC_IFLOWER: case FUNC_IFLOWEROREQUAL:
+            case FUNC_IFNOTEQUAL: case FUNC_WEQUAL: case FUNC_WGREATER: case FUNC_WGREATEROREQUAL: case FUNC_WLOWER:
+            case FUNC_WLOWEROREQUAL: case FUNC_WNOTEQUAL: case FUNC_SWITCH: case FUNC_FOREACHACTIVE: case FUNC_FOREACHALL:
+                ++depth;
+                break;
+            case FUNC_ENDIF: case FUNC_LOOP: case FUNC_ENDSWITCH: case FUNC_NEXT: --depth; break;
+            default: break;
+        }
+    }
+}
+// After a stage's scripts are in place (the image or the decode; RSDKv4/Scene.cpp, before the startups run).
+void PS1DirectOperandsLoad()
+{
+    g_ps1DirectOperands = g_ps1GenericOperands = 0;
+    if (!g_ps1DirectOn)
+        return;
+    for (int s = 0; s < OBJECT_COUNT; ++s) {
+        const ObjectScript &o = objectScriptList[s];
+        const int subs[3]     = { o.eventUpdate.scriptCodePtr, o.eventDraw.scriptCodePtr, o.eventStartup.scriptCodePtr };
+        for (int k = 0; k < 3; ++k)
+            if (subs[k] > 0 && subs[k] < scriptCodePos && PS1_RAW(subs[k]) > 0)
+                PS1DirectOperandsFrom(subs[k], false);
+    }
+    for (int f = 0; f < FUNCTION_COUNT; ++f) {
+        int p = scriptFunctionList[f].ptr.scriptCodePtr;
+        if (p > 0 && p < scriptCodePos)
+            PS1DirectOperandsFrom(p, true);
+    }
+    g_ps1DirectWalks = g_ps1DirectWalks + 1;
+}
+// The direct operand's storage (fetch and write-back compute it the same way, at their own time, as the generic path).
+static inline uint8_t *PS1DirectAt(const short *c)
+{
+    switch ((c[0] >> 2) & 3) {
+        case PS1_DB_REL: return (uint8_t *)&PS1_OBJ(objectEntityPos + c[2]) + c[1];
+        case PS1_DB_ABS: return (uint8_t *)&objectEntityList[c[2]] + c[1];
+        case PS1_DB_ENG: return (uint8_t *)&scriptEng + c[1];
+        default: return (uint8_t *)&globalVariables[c[1]];
+    }
+}
+#endif
+
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -10216,6 +10390,20 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
         // Get Values
         for (int i = 0; i < opcodeSize; ++i) {
             int opcodeType = PS1_RAW(scriptCodePtr++);
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+            if (opcodeType >= PS1_DIRECT) { // a direct operand (PS1DirectOperand)
+                const short *c = &scriptCode.slot[scriptCodePtr - 1];
+                const uint8_t *at = PS1DirectAt(c);
+                switch (opcodeType & 3) {
+                    case PS1_DW_INT: scriptEng.operands[i] = *(const int *)at; break;
+                    case PS1_DW_U8: scriptEng.operands[i] = *at; break;
+                    case PS1_DW_S8: scriptEng.operands[i] = *(const int8_t *)at; break;
+                    default: scriptEng.operands[i] = *(const uint16_t *)at; break;
+                }
+                scriptCodePtr += (opcodeType & PS1_DIRECT_LONG) ? 4 : 2;
+                continue;
+            }
+#endif
 
             if (opcodeType == SCRIPTVAR_VAR) {
                 int arrayVal = 0;
@@ -13078,6 +13266,20 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             scriptCodePtr -= scriptCodePtr - scriptCodeOffset;
         for (int i = 0; i < opcodeSize; ++i) {
             int opcodeType = PS1_RAW(scriptCodePtr++);
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+            if (opcodeType >= PS1_DIRECT) { // a direct operand (PS1DirectOperand)
+                const short *c = &scriptCode.slot[scriptCodePtr - 1];
+                uint8_t *at    = PS1DirectAt(c);
+                switch (opcodeType & 3) {
+                    case PS1_DW_INT: *(int *)at = scriptEng.operands[i]; break;
+                    case PS1_DW_U8: *at = (uint8_t)scriptEng.operands[i]; break;
+                    case PS1_DW_S8: *(int8_t *)at = (int8_t)scriptEng.operands[i]; break;
+                    default: *(uint16_t *)at = (uint16_t)scriptEng.operands[i]; break;
+                }
+                scriptCodePtr += (opcodeType & PS1_DIRECT_LONG) ? 4 : 2;
+                continue;
+            }
+#endif
             if (opcodeType == SCRIPTVAR_VAR) {
                 int arrayVal = 0;
                 switch (PS1_RAW(scriptCodePtr++)) { // variable

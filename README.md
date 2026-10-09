@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`4eda09044fa52aa06115d313092eea009f6fa1222872c42b2e310f1271602181`. Other versions of FFmpeg or psxavenc may encode the
+`093c4202c678b4a311552196a56d447a75dc5f3e5bf6c89ae487e89c86742e97`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -56,7 +56,9 @@ sectors, the file index, and every file against its source.
 - **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 73 % of full
   speed, up from about 66 %.
 - **Wing Fortress at full speed:** it used to drop slightly below.
-- **Smoother busy zones:** Hidden Palace and Aquatic Ruin run 3-5 % faster, and every zone gains a little.
+- **Smoother busy zones:** Hidden Palace and Aquatic Ruin run 4-7 % faster, and every zone gains a little.
+- **Faster game scripts:** the engine now reads the game's script variables directly instead of looking each one up
+  every time, which speeds up every stage a little.
 - **More free memory** for the game, so loading the special stages is safer.
 - Nothing looks or plays differently: every change was checked frame by frame against the previous version.
 

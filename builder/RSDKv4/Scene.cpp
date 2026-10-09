@@ -6,6 +6,7 @@
 #include "../ps1/tileset.hh"
 #include "../ps1/video.hh"
 void PS1BuildTileVisuals(); // ps1/render.cpp
+void PS1DirectOperandsLoad(); // Script.cpp
 void PS1LoadBGStrips(const char *folder, int player);
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
@@ -933,6 +934,9 @@ void LoadStageFiles(void)
     }
     LoadActLayout();
     Init3DFloorBuffer(0);
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+    PS1DirectOperandsLoad(); // Script.cpp: the scripts' plain operands into their direct form
+#endif
     ProcessStartupObjects();
 }
 int LoadActFile(const char *ext, int stageID, FileInfo *info)
