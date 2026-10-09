@@ -44,12 +44,21 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`fc6c1a11749e7df810e99f9611f514cf2999bc6b9c56c4d14bf2acacbf9617f9`. Other versions of FFmpeg or psxavenc may encode the
+`4eda09044fa52aa06115d313092eea009f6fa1222872c42b2e310f1271602181`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
 Before writing it, the builder verifies the image byte by byte: sector headers, EDC/ECC of every sector, the license
 sectors, the file index, and every file against its source.
+
+## What's new (October 2026)
+
+- **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 73 % of full
+  speed, up from about 66 %.
+- **Wing Fortress at full speed:** it used to drop slightly below.
+- **Smoother busy zones:** Hidden Palace and Aquatic Ruin run 3-5 % faster, and every zone gains a little.
+- **More free memory** for the game, so loading the special stages is safer.
+- Nothing looks or plays differently: every change was checked frame by frame against the previous version.
 
 ## What the PS1 version can do
 
@@ -66,8 +75,8 @@ sectors, the file index, and every file against its source.
 - No Egg Gauntlet (the boss rush): its sprites don't fit the video RAM.
 - No online features, 2-player versus, achievements or leaderboards.
 - No touch controls, dev menu, settings file or mods from the mobile version.
-- The special stages and a few busy zones (Aquatic Ruin, Hidden Palace, Wing Fortress) run below full speed in
-  emulators (the special stages at about 70 %): the PS1 draws every frame instead of skipping some.
+- The special stages and two busy zones (Aquatic Ruin, Hidden Palace) run below full speed in emulators (the special
+  stages at about 73 %, those zones at about 85-90 %): the PS1 draws every frame instead of skipping some.
 - Tested in PCSX-Redux (including boot through a retail NTSC-U BIOS) and on a real PSone from a CD-R.
 
 ## Compromises to make this work

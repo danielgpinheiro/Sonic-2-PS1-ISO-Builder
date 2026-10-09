@@ -794,7 +794,8 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialPlayerRun", 0),
     FunctionInfo("PS1SpecialSetupSort", 0),
     FunctionInfo("PS1SpecialSetupUpdate", 0),
-#if PS1_GAME == 1
+    // Sonic 1's own natives (docs/37), after Sonic 2's: implemented in its build only; listed in both (2026-10-09) so
+    // the opcodes added after them have one number in both builds and in the tools
     FunctionInfo("PS1SSRotPos", 0),
     FunctionInfo("PS1SSBlockCollide", 0),
     FunctionInfo("PS1SSBlockDraw", 2),
@@ -807,7 +808,9 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1S1ZoneObj", 1),
     FunctionInfo("PS1S1Spring", 1),
     FunctionInfo("PS1S1LZSetup", 1),
-#endif
+    // Sonic 2 natives added after Sonic 1's (docs/30 "Mania lessons pass", 2026-10-09): Sonic 1's numbers stay
+    FunctionInfo("PS1SpecialBGDraw", 0),
+    FunctionInfo("PS1RingSparkle", 0),
 #endif
 };
 
@@ -1357,8 +1360,7 @@ enum ScrFunc {
     FUNC_PS1SPECIALPLAYERRUN,
     FUNC_PS1SPECIALSETUPSORT,
     FUNC_PS1SPECIALSETUPUPDATE,
-#if PS1_GAME == 1
-    // Sonic 1's own natives (docs/37), after Sonic 2's: its build only (the tools list them too, after the same numbers)
+    // Sonic 1's own natives (docs/37), after Sonic 2's (implemented in its build only; numbered in both)
     FUNC_PS1SSROTPOS,
     FUNC_PS1SSBLOCKCOLLIDE,
     FUNC_PS1SSBLOCKDRAW,
@@ -1371,7 +1373,8 @@ enum ScrFunc {
     FUNC_PS1S1ZONEOBJ,
     FUNC_PS1S1SPRING,
     FUNC_PS1S1LZSETUP,
-#endif
+    FUNC_PS1SPECIALBGDRAW, // Sonic 2, after Sonic 1's
+    FUNC_PS1RINGSPARKLE,
 #endif
     FUNC_MAX_CNT
 };
@@ -9748,6 +9751,134 @@ static void PS1SpecialSetupUpdate()
     else
         G[7] = 0;
 }
+// The special stage's Special BG draw sub (every frame: the rotating star field, 12 sprites), natively: one statement
+// per script instruction, in order (t = temps; p = slot 0's values: the stage's camera angles). Patched in only when
+// the sub and its jump-table entries match SPBG_DRAW_SIG (docs/30 "Mania lessons pass": ~50 VM instructions a frame).
+__attribute__((optimize("Os"))) static void PS1SpecialBGDraw(ObjectScript *o)
+{
+    int *t     = scriptEng.temp;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    t[2] = PS1_OBJ(0).values[8];
+    t[2] += 64;
+    t[2] &= 511;
+    t[2] >>= 7;
+    switch (t[2]) {
+        case 0:
+            t[0]        = PS1_OBJ(0).values[8];
+            t[1]        = PS1_OBJ(0).values[7];
+            t[1]        = -t[1];
+            me.rotation = PS1_OBJ(0).values[9];
+            break;
+        case 1:
+            t[0]        = PS1_OBJ(0).values[8];
+            t[1]        = PS1_OBJ(0).values[9];
+            t[1]        = -t[1];
+            me.rotation = PS1_OBJ(0).values[7];
+            me.rotation = -me.rotation;
+            break;
+        case 2:
+            t[0]        = PS1_OBJ(0).values[8];
+            t[1]        = PS1_OBJ(0).values[7];
+            me.rotation = PS1_OBJ(0).values[9];
+            me.rotation = -me.rotation;
+            break;
+        case 3:
+            t[0]        = PS1_OBJ(0).values[8];
+            t[1]        = PS1_OBJ(0).values[9];
+            me.rotation = PS1_OBJ(0).values[7];
+            me.rotation = -me.rotation;
+            break;
+    }
+    t[0] <<= 1;
+    t[0] &= 255;
+    t[1] <<= 1;
+    t[1] &= 255;
+    me.rotation &= 511;
+    t[2] = PS1_OBJ(0).values[7];
+    t[2] += PS1_OBJ(0).values[8];
+    t[2] += PS1_OBJ(0).values[9];
+    t[2] &= 127;
+    if (t[2] == 0) {
+        v[1] = Sin256(me.angle);
+        me.angle += 8;
+        me.angle &= 255;
+    }
+    else {
+        me.angle = 0;
+        v[1] >>= 1;
+    }
+    t[2] = v[1];
+    t[2] *= 3;
+    t[2] >>= 9;
+    t[1] += t[2];
+    t[0] += SCREEN_CENTERX;
+    t[1] += SCREEN_CENTERY;
+    if (me.rotation == 0) {
+        for (int f = 0; f < 12; ++f) { // DrawSpriteScreenXY f TEMP0 TEMP1
+            const SpriteFrame *sf = &scriptFrames[o->frameListOffset + f];
+            DrawSprite(t[0] + sf->pivotX, t[1] + sf->pivotY, sf->width, sf->height, sf->sprX, sf->sprY, o->spriteSheetID);
+        }
+    }
+    else {
+        static const uint8_t frames[9] = { 1, 2, 3, 5, 6, 7, 8, 9, 10 };
+        for (int k = 0; k < 9; ++k) { // DrawSpriteScreenFX f FX_ROTATE TEMP0 TEMP1
+            const SpriteFrame *sf = &scriptFrames[o->frameListOffset + frames[k]];
+            DrawSpriteRotated(me.direction, t[0], t[1], -sf->pivotX, -sf->pivotY, sf->sprX, sf->sprY, sf->width, sf->height, me.rotation,
+                              o->spriteSheetID);
+        }
+    }
+}
+// The special stage's Ring Sparkle update sub (a ring's pick-up sparkle: one 3D sprite face, 4 vertices), natively:
+// one statement per script instruction, in order (ap = array positions, left as the script leaves them). Patched in
+// only when the sub and its jump-table entries match SPARKLE_SIG.
+__attribute__((optimize("Os"))) static void PS1RingSparkleUpdate()
+{
+    int *ap    = scriptEng.arrayPosition;
+    Entity &me = PS1_OBJ(objectEntityPos);
+    int *v     = me.values;
+    ap[0]      = vertexCount;
+    ap[1]      = faceCount;
+    PS1Face(ap[1]).flag = 7;
+    PS1Face(ap[1]).a    = ap[0];
+    PS1Vertex(ap[0]).x  = v[4];
+    PS1Vertex(ap[0]).y  = v[5];
+    PS1Vertex(ap[0]).z  = v[6];
+    PS1Vertex(ap[0]).u  = 9;
+    PS1Vertex(ap[0]).v  = 1;
+    ap[0]++;
+    PS1Face(ap[1]).b   = ap[0];
+    PS1Vertex(ap[0]).x = v[4];
+    PS1Vertex(ap[0]).y = v[5];
+    PS1Vertex(ap[0]).z = v[6];
+    PS1Vertex(ap[0]).u = me.frame;
+    PS1Vertex(ap[0]).v = 0;
+    ap[0]++;
+    PS1Face(ap[1]).c   = ap[0];
+    PS1Vertex(ap[0]).x = v[4];
+    PS1Vertex(ap[0]).y = v[5];
+    PS1Vertex(ap[0]).z = v[6];
+    PS1Vertex(ap[0]).u = 512;
+    PS1Vertex(ap[0]).v = 0;
+    ap[0]++;
+    PS1Face(ap[1]).d   = ap[0];
+    PS1Vertex(ap[0]).x = v[4];
+    PS1Vertex(ap[0]).y = v[5];
+    PS1Vertex(ap[0]).z = v[6];
+    PS1SetVertexCount(vertexCount + 4);
+    PS1SetFaceCount(faceCount + 1);
+    if (v[3] < PS1_OBJ(0).values[13])
+        me.type = 0;
+    me.animationTimer++;
+    if (me.animationTimer == 4) {
+        me.animationTimer = 0;
+        me.frame++;
+        if (me.frame == 3) {
+            me.type  = 0;
+            me.frame = 0;
+        }
+    }
+}
 // The Halfpipe's update sub (Special), natively: one statement per script instruction, in order; its segment build
 // (function 0) runs natively too (PS1HalfpipeSegment). Advances the pipe (value1 += speed; a new segment each 64) and
 // interpolates the camera / pipe tables between segments. Patched in only when the sub and its jump-table entries match
@@ -11876,9 +12007,20 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 uint32_t t0 = PS1Hblanks();
                 TransformVertexBuffer();
                 uint32_t t1 = PS1Hblanks();
+#if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL) // the host tool (tools/rsdkmanifest) has no PS1 Scene3D
+                uint32_t t2 = t1;
+                if (g_ps1Draw3DOT && !g_ps1Sort3DExact) // the sort folded into an ordering table (Scene3D.cpp)
+                    PS1Draw3DSceneOT(scriptInfo->spriteSheetID);
+                else {
+                    Sort3DDrawList();
+                    t2 = PS1Hblanks();
+                    Draw3DScene(scriptInfo->spriteSheetID);
+                }
+#else
                 Sort3DDrawList();
                 uint32_t t2 = PS1Hblanks();
                 Draw3DScene(scriptInfo->spriteSheetID);
+#endif
                 g_ps1Prof3DTransformHbl = (uint16_t)(t1 - t0);
                 g_ps1Prof3DSortHbl      = (uint16_t)(t2 - t1);
                 g_ps1Prof3DDrawHbl      = PS1HblanksSince(t2);
@@ -12348,6 +12490,14 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 opcodeSize = 0;
                 PS1SpecialSetupUpdate();
                 break;
+            case FUNC_PS1SPECIALBGDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpecialBGDraw(scriptInfo);
+                break;
+            case FUNC_PS1RINGSPARKLE: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1RingSparkleUpdate();
+                break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:
                 // one statement per script instruction, in order; patched in only when it matches HDOOR_SIG exactly.
@@ -12528,7 +12678,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1PLAYERSTATE12: case FUNC_PS1MPZSETUP: case FUNC_PS1INVISIBLEBLOCK:
             case FUNC_PS1SPECIALRING: case FUNC_PS1HALFPIPE: case FUNC_PS1HALFPIPESEGMENT: case FUNC_PS1PLAYERFACES:
             case FUNC_PS1SPECIALPLAYERRUN: case FUNC_PS1SPECIALSETUPSORT: case FUNC_PS1SPECIALSETUPUPDATE:
-            case FUNC_PS1HORIZONTALDOOR:
+            case FUNC_PS1HORIZONTALDOOR: case FUNC_PS1SPECIALBGDRAW: case FUNC_PS1RINGSPARKLE:
                 opcodeSize           = 0;
                 g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
                 running              = false;

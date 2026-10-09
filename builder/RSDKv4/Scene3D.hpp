@@ -148,6 +148,10 @@ void TransformVertexBuffer();
 void TransformVertices(Matrix *matrix, int startIndex, int endIndex);
 void Sort3DDrawList();
 void Draw3DScene(int spriteSheetID);
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1
+void PS1Draw3DSceneOT(int spriteSheetID); // Sort3DDrawList + Draw3DScene as an ordering table (Scene3D.cpp)
+extern volatile uint32_t g_ps1Draw3DOT, g_ps1Sort3DExact;
+#endif
 
 void ProcessScanEdge(Vertex *vertA, Vertex *vertB);
 void ProcessScanEdgeUV(Vertex *vertA, Vertex *vertB);

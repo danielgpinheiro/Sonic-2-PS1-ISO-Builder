@@ -77,7 +77,21 @@ void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n);
 // + k * (wpp + 1)), nullptr if the arena is full; PS1ChainBulkEnd(used) links the first `used` of them.
 uint32_t *PS1ChainBulkBegin(int n, int wpp);
 void PS1ChainBulkEnd(int used);
+#if PS1_GAME != 1
+// Sonic 2's 3D ordering table (RSDKv4/Scene3D.cpp PS1Draw3DSceneOT; Driver 2's model, docs/38 2.3):
+//  - PS1ChainBulkKeep(used): like PS1ChainBulkEnd, but the primitives stay unlinked (the caller links each one).
+//  - PS1ChainCaptureBegin / End: every fragment chained in between goes to a private sub-list (first .. last, the last
+//    one's size in countWord's top byte) instead of the frame's chain; End returns false if nothing was chained.
+//  - PS1ChainOTBegin(n): n empty DMA tags in the arena, linked in order and chained here (the GPU walks tag 0 first);
+//    a node / sub-list goes into bucket k as its new head: last = count | (tag[k] & 0xffffff), tag[k] = first.
+//    Every node must be <= 14 words (psyqo flags bigger ones with bit 23).
+void PS1ChainBulkKeep(int used);
+void PS1ChainCaptureBegin();
+bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord);
+uint32_t *PS1ChainOTBegin(int n);
+#endif
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
+void PS1ChainSpriteWords(uint32_t xy, uint32_t tex, uint32_t wh); // opaque sprite, colour 0x80, from its words
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage
 void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; semi-trans uses the current texpage mode
 

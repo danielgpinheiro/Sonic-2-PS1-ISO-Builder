@@ -23,7 +23,11 @@ extern int cos512LookupTable[0x200];
 extern int sin256LookupTable[0x100];
 extern int cos256LookupTable[0x100];
 
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL)
+extern const byte arcTan256Triangle[0x100 * 0x101 / 2]; // the table's triangle x <= y (Math.cpp PS1ArcTan256)
+#else
 extern byte arcTan256LookupTable[0x100 * 0x100];
+#endif
 
 // Setup Angles
 void CalculateTrigAngles();

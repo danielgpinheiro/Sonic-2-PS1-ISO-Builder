@@ -8,6 +8,14 @@
 #include "trig_tables.inc"
 
 void CalculateTrigAngles() { srand(time(NULL)); }
+// arcTan256LookupTable[(x << 8) + y] from its triangle (tools/trig/gen_trig.c, which checks every entry)
+static inline byte PS1ArcTan256(int x, int y)
+{
+    if (x <= y)
+        return arcTan256Triangle[(y * (y + 1) >> 1) + x];
+    return y == 0 ? 0 : (byte)(63 - arcTan256Triangle[(x * (x + 1) >> 1) + y]);
+}
+#define PS1_ATAN(x, y) PS1ArcTan256(x, y)
 #else
 int sinM7LookupTable[0x200];
 int cosM7LookupTable[0x200];
@@ -90,14 +98,17 @@ byte ArcTanLookup(int X, int Y)
             y >>= 4;
         }
     }
+#ifndef PS1_ATAN
+#define PS1_ATAN(x, y) arcTan256LookupTable[((x) << 8) + (y)]
+#endif
     if (X <= 0) {
         if (Y <= 0)
-            return arcTan256LookupTable[(x << 8) + y] + -0x80;
+            return PS1_ATAN(x, y) + -0x80;
         else
-            return -0x80 - arcTan256LookupTable[(x << 8) + y];
+            return -0x80 - PS1_ATAN(x, y);
     }
     else if (Y <= 0)
-        return -arcTan256LookupTable[(x << 8) + y];
+        return -PS1_ATAN(x, y);
     else
-        return arcTan256LookupTable[(x << 8) + y];
+        return PS1_ATAN(x, y);
 }
