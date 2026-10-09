@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`093c4202c678b4a311552196a56d447a75dc5f3e5bf6c89ae487e89c86742e97`. Other versions of FFmpeg or psxavenc may encode the
+`52d67016383eec0ce58e8dafb11e49291ecb56cd14c6b828d38533874747d83a`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,10 +53,13 @@ sectors, the file index, and every file against its source.
 
 ## What's new (October 2026)
 
-- **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 73 % of full
+- **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 74 % of full
   speed, up from about 66 %.
 - **Wing Fortress at full speed:** it used to drop slightly below.
-- **Smoother busy zones:** Hidden Palace and Aquatic Ruin run 4-7 % faster, and every zone gains a little.
+- **Smoother busy zones:** Hidden Palace runs about 11 % faster and Aquatic Ruin about 7 %, Chemical Plant a little,
+  and every zone gains a little.
+- **Quicker underwater:** being underwater (the air countdown, bubbles and splashes) costs much less time, which is where
+  the water zones gain most. Hidden Palace's own stage logic is quicker too.
 - **Faster game scripts:** the engine now reads the game's script variables directly instead of looking each one up
   every time, which speeds up every stage a little.
 - **More free memory** for the game, so loading the special stages is safer.
