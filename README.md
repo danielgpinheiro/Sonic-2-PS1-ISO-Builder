@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`52d67016383eec0ce58e8dafb11e49291ecb56cd14c6b828d38533874747d83a`. Other versions of FFmpeg or psxavenc may encode the
+`6033dd62c140921272d25960e30d82781893dccef754aa7971cd5f90f4b76386`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,6 +53,10 @@ sectors, the file index, and every file against its source.
 
 ## What's new (October 2026)
 
+- **Sonic 3 shields and the insta shield:** the original 2013 release's hidden shield setting is now in Options
+  (Shields: Sonic 2, Sonic 2 + insta, Sonic 3, Sonic 3 + insta) and works with save files. It starts on Sonic 3 +
+  insta shield: fire, bubble and lightning shields from the monitors, and Sonic's insta shield on a second jump press.
+  Time Attack keeps the classic shields.
 - **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 74 % of full
   speed, up from about 66 %.
 - **Wing Fortress at full speed:** it used to drop slightly below.
@@ -63,7 +67,8 @@ sectors, the file index, and every file against its source.
 - **Faster game scripts:** the engine now reads the game's script variables directly instead of looking each one up
   every time, which speeds up every stage a little.
 - **More free memory** for the game, so loading the special stages is safer.
-- Nothing looks or plays differently: every change was checked frame by frame against the previous version.
+- Apart from the new shield setting, nothing looks or plays differently: every change was checked frame by frame
+  against the previous version.
 
 ## What the PS1 version can do
 
@@ -72,7 +77,8 @@ sectors, the file index, and every file against its source.
 - Saving on the **memory card in slot 1** (one block, with a Sonic 2 icon): save files, Time Attack records. Without a
   card the game plays normally and doesn't save.
 - The special stages' half-pipe in 3D, transformed and projected by the PS1's geometry coprocessor.
-- Options: music and sound effect volume, credits.
+- Options: music and sound effect volume, the shields (Sonic 2 or Sonic 3 style, with or without the insta shield),
+  credits.
 - An animated loading icon while the game reads from the disc (zones load in about 5 seconds).
 
 ## What the PS1 version can't do

@@ -638,8 +638,13 @@ void InitNativeObjectSystem()
         saveGame->vDPadY_Move     = 184;
         saveGame->vDPadX_Jump     = -56;
         saveGame->vDPadY_Jump     = 188;
+#if RETRO_PLATFORM == RETRO_PS1 // every character from the start in both games (user 2026-10-09; ps1/menu.cpp)
+        saveGame->tailsUnlocked   = true;
+        saveGame->knuxUnlocked    = true;
+#else
         saveGame->tailsUnlocked   = Engine.gameType != GAME_SONIC1;
         saveGame->knuxUnlocked    = Engine.gameType != GAME_SONIC1;
+#endif
         saveGame->unlockedActs    = 0;
 #if RETRO_PLATFORM != RETRO_PS1 // PS1: no card write at boot; the first real save (a file, options, a record) creates it
         WriteSaveRAMData();

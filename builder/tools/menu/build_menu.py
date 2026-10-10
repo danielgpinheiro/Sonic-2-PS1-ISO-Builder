@@ -54,7 +54,13 @@ STRINGS = ['StartGame', 'TimeAttack', 'HelpAndOptions', 'SaveSelect', 'PlayerSel
            'Settings', 'Music', 'SoundFX', 'SpinDash', 'On', 'Off', 'StaffCredits', 'Records', 'NewBestTime',
            'TotalTime', 'Play', 'Go', 'NextAct', 'PressStart', 'Sonic', 'Tails', 'Knuckles'] + \
           ['StageName%d' % i for i in range(1, 13)] + ['SaveStageName%d' % i for i in range(1, 26)]
-EXTRA_STRINGS = {'SonicAndTails': 'SONIC & TAILS', 'Options': 'OPTIONS', 'Back': 'BACK'}
+EXTRA_STRINGS = {'SonicAndTails': 'SONIC & TAILS', 'Options': 'OPTIONS', 'Back': 'BACK',
+                 # the original's hidden options in the PS1 Options (ps1/menu.cpp; the level select's ITEMS /
+                 # MAX EMERALDS): Sonic 2's four shield settings, Sonic 1's four, Sonic 1's emerald count
+                 'Shields': 'SHIELDS', 'ShieldSonic1': 'SONIC 1', 'ShieldSonic2': 'SONIC 2',
+                 'ShieldSonic2Insta': 'SONIC 2 + INSTA', 'ShieldSonic3': 'SONIC 3', 'ShieldSonic3Insta': 'SONIC 3 + INSTA',
+                 'ShieldSonic1S3': 'SONIC 1 + S3', 'ShieldSonic2S3': 'SONIC 2 + S3', 'MaxEmeralds': 'MAX EMERALDS',
+                 'Six': '6', 'Seven': '7'}
 EXTRA_CHARS = "0123456789:'\".,!?-&/()<> "
 
 # Fonts: (name in the pack, .fnt, page, scale, strings drawn with it, pack)

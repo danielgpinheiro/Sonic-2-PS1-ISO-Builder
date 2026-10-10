@@ -39,6 +39,8 @@ natively, leaving the same temps and table / local writes behind.
 - Hidden Palace's HPZ Setup update sub -> PS1HPZSetup / End when HPZSETUP_SIG matches, jump-table entries included.
 - The special stage's Player Object update sub -> PS1SpecialPlayer / End when SPPLAYER_SIG matches and every function of
   the stage can run from a native (its two CallFunctions are variable).
+- Stage Setup's startup no longer wipes options.shieldType (Sonic 1: and options.superStates) in save mode: the
+  saveSlot test's constant 0 -> 127 (patch_keep_options; the PS1 menus set them from the saved Options).
 - The Water update subs of Aquatic Ruin, Chemical Plant and Hidden Palace -> PS1ARZWater / PS1CPZWater / PS1HPZWater
   / End when ARZWATER_SIG / CPZWATER_SIG / HPZWATER_SIG match and (Aquatic Ruin, Chemical Plant) Water's startup sets
   motion functions 103 / 104 (their variable CallFunction).
@@ -8762,6 +8764,68 @@ def patch_s1_lzsetup(bcdir):
     return 'PS1S1LZSetup native in %s' % (', '.join(done) or '-')
 
 
+def global_variable_names(data):
+    """GameConfig.bin's global variable names, in index order (GLOBAL[1,0,i])."""
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    r = object_sheets._R(os.path.join(data, 'Game', 'GameConfig.bin'))
+    r.s(), r.s()
+    r.p += 0x60 * 3
+    n = r.u8()
+    [r.s() for _ in range(n)]
+    [r.s() for _ in range(n)]
+    out = []
+    for _ in range(r.u8()):
+        out.append(r.s())
+        r.p += 4
+    return out
+
+
+KEEPOPTIONS_NEVER = 127  # options.saveSlot is 0-4: `IfGreater saveSlot 127` never holds
+
+
+def patch_keep_options(bcdir, s1=False):
+    """Stage Setup's startup (GlobalCode) wipes the level select's hidden options whenever a save file is in use:
+    `IfGreater options.saveSlot 0` -> `options.shieldType = 0` (Sonic 1: and `options.superStates = 0`). The PS1 menus
+    set them from the saved Options instead (ps1/menu.cpp: Sonic 3 shields / insta shield, Sonic 1's 7th emerald), so
+    the test's constant 0 -> KEEPOPTIONS_NEVER (same length; the block never runs). The globals are checked by name
+    in GameConfig, the block by its exact listing."""
+    names, vars_ = bs.tables(3)
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    data = os.path.join(bcdir, '..', 'Data')
+    gnames = object_sheets.game_config(data)[0]
+    path = os.path.join(bcdir, 'GlobalCode.bin')
+    raw = open(path, 'rb').read()
+    own, p = bs.blocks(raw, 0)
+    rest = raw[p:]
+    gv = global_variable_names(data)
+    want = ['options.saveSlot', 'options.shieldType'] + (['options.superStates'] if s1 else [])
+    idx = [gv.index(n) for n in want]
+    sig = [None] + ['Equal GLOBAL[1,0,%d] 0' % i for i in idx[1:]] + ['endif']  # [0]: IfGreater saveSlot <const>
+    ptr = bs.load(path)[2][gnames.index('Stage Setup')][2]
+    ins = instructions(own, ptr, names, vars_)
+    lst = listing(ins)
+    hits = []
+    for k in range(len(lst) - len(sig) + 1):
+        n, opsk = ins[k][1], ins[k][2]
+        w = lst[k].split()
+        if n == 'IfGreater' and len(w) == 4 and w[2] == 'GLOBAL[1,0,%d]' % idx[0] and \
+                lst[k + 1:k + len(sig)] == sig[1:] and opsk[2][0] == 'int':
+            hits.append((k, opsk[2][1], opsk[2][2]))
+    if len(hits) != 1:
+        raise SystemExit('keep options: %d matches of %s in Stage Setup\'s startup' % (len(hits), sig))
+    k, value, pos = hits[0]
+    if value == KEEPOPTIONS_NEVER:
+        return 'Stage Setup keeps the options in save mode (already)'
+    if value != 0 or own[pos] != 0:
+        raise SystemExit('keep options: unexpected test constant %d' % value)
+    own[pos] = KEEPOPTIONS_NEVER
+    open(path, 'wb').write(encode(own) + rest)
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+    return 'Stage Setup keeps %s in save mode (saveSlot test 0 -> %d)' % (' / '.join(want[1:]), KEEPOPTIONS_NEVER)
+
+
 def s1_patches():
     """Sonic 1 (docs/37): its own list. Sonic 2's oscillators and Green Hill's Bridge draw match Sonic 1's scripts word
     for word, the player physics with Sonic 1's numbers (PLAYERFN_SIGS_S1); its own natives are added here as they are
@@ -8769,6 +8833,7 @@ def s1_patches():
     return (('oscillate', patch_oscillate),
             ('bridge', lambda d: patch_stage_sub(d, 'Bridge', 1, BRIDGE_SIG, 'PS1BridgeDraw')),
             ('entitylayout', lambda d: patch_entity_layout(d, ENTITY_BOUND_SITES_S1)),
+            ('keepoptions', lambda d: patch_keep_options(d, s1=True)),
             ('clearall', lambda d: patch_clear_all(d, CLEARALL_SITES_S1)),
             ('backpause', lambda d: patch_back_pause(d, s1=True)),  # before playerinput: its signature has the patched If
             ('playerinput', lambda d: patch_player_input(d, PLAYERINPUT_FN_SIG_S1)),
@@ -8862,7 +8927,8 @@ def main():
                                                             with_jumps=True)),
                      ('spplayer', patch_special_player),
                      ('arzwater', patch_arz_water),
-                     ('cpzwater', patch_cpz_water), ('hpzwater', patch_hpz_water)):
+                     ('cpzwater', patch_cpz_water), ('hpzwater', patch_hpz_water),
+                     ('keepoptions', patch_keep_options)):
         if not only or name in only.split(','):
             print('%s: %s' % (name, fn(bcdir)))
 
