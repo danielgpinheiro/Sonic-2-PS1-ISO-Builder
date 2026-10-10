@@ -10075,19 +10075,20 @@ __attribute__((optimize("Os"))) static void PS1SpecialPlayerUpdate()
 // entering / leaving the water, the drowning countdown with its sounds, music and bubbles, the splash), natively: one
 // statement per script instruction, in order (t = temps, cr = check result, ap = array positions, G = globals; P = the
 // player in ARRAYPOS6, B = the entity ARRAYPOS6 past the water, N = the temp object in ARRAYPOS8). Three stages' copies,
-// Z: 0 Aquatic Ruin (ARZWATER_SIG), 1 Chemical Plant (CPZWATER_SIG), 2 Hidden Palace (HPZWATER_SIG); each patched in
+// Z: 0 Aquatic Ruin (ARZWATER_SIG), 1 Chemical Plant (CPZWATER_SIG), 2 Hidden Palace (HPZWATER_SIG; one function, Z
+// a parameter: three template copies cost 21 KB of code and the special stage's load ran out of RAM); each patched in
 // only when its sub and jump-table entries match. They differ in the level's motion (0 / 1: value 3 = the motion
 // function the startup puts in a per-act table, 103 / 104, which the patcher checks; any other value is counted and
 // called as the VM would. 2: a stage local picks a moving level or the stage's water level), the level's sine wobble
 // (1, 2), the splash object, value 18 at a splash (1, 2), the stage locals, the countdown functions and the bubbles.
 // Their CallFunctions run in the VM (PS1CallScriptFunction): 41, 37 and the countdown's three.
 volatile uint32_t g_ps1WaterUnverified = 0; // value 3 named a function the patcher didn't check (GDB; expected 0)
-template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
+__attribute__((optimize("Os"))) static void PS1WaterUpdate(const int Z)
 {
-    constexpr int SPLASH = Z == 0 ? 72 : Z == 1 ? 74 : 47; // the splash object's type
-    constexpr int BUBBLE = Z == 2 ? 44 : 42;              // the drowning bubbles' type
-    constexpr int FN     = Z == 2 ? 107 : 105;            // the countdown's functions FN, FN + 1, FN + 2
-    constexpr int LOCAL4 = Z == 1 ? 63680 : 63679;        // the stage local set to 4 after a bubble burst
+    const int SPLASH = Z == 0 ? 72 : Z == 1 ? 74 : 47; // the splash object's type
+    const int BUBBLE = Z == 2 ? 44 : 42;              // the drowning bubbles' type
+    const int FN     = Z == 2 ? 107 : 105;            // the countdown's functions FN, FN + 1, FN + 2
+    const int LOCAL4 = Z == 1 ? 63680 : 63679;        // the stage local set to 4 after a bubble burst
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
     int &cr        = scriptEng.checkResult;
     const int self = objectEntityPos;
@@ -10099,14 +10100,14 @@ template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
     t[1] = PS1_OBJ(0).ypos;
     t[1] >>= 16;
     ap[0] = self;
-    if constexpr (Z != 2) {
+    if (Z != 2) {
         int fn = PS1_OBJ(self).values[3]; // the startup's table: 103 (act 1) / 104 (act 2), both checked by the patcher
         if (fn != 103 && fn != 104)
             g_ps1WaterUnverified = g_ps1WaterUnverified + 1;
         PS1CallScriptFunction(fn, 0);
     }
     Entity &me = PS1_OBJ(self);
-    if constexpr (Z == 0) {
+    if (Z == 0) {
         if (me.ypos < G[48])
             me.ypos += 65536;
         if (me.ypos > G[48])
@@ -10115,7 +10116,7 @@ template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
         t[7]       = waterLevel;
         waterLevel >>= 16;
     }
-    else if constexpr (Z == 1) {
+    else if (Z == 1) {
         if (me.ypos < G[48])
             me.ypos += 65536;
         if (me.ypos > G[48])
@@ -10156,7 +10157,7 @@ template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
             t[0] = cr;
             cr   = P.state != 28;
             t[0] &= cr;
-            if constexpr (Z != 2) {
+            if (Z != 2) {
                 cr = P.state != 1;
                 t[0] &= cr;
             }
@@ -10174,14 +10175,14 @@ template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
                 P.xvel >>= 1;
                 P.speed >>= 1;
                 PS1CallScriptFunction(41, 0);
-                if constexpr (Z == 1) {
+                if (Z == 1) {
                     if (ap[6] == 0 && scriptCode[63681] != 1)
                         PS1ScriptWrite(63681, 1);
                 }
                 if (P.yvel != 0) {
                     PS1CreateTempObject(SPLASH, 0, P.xpos, t[7]);
                     N.drawOrder = 4;
-                    if constexpr (Z != 0)
+                    if (Z != 0)
                         P.values[18] = 4;
                     if (Z != 2 || P.state != 1)
                         PlaySfx(44, 0);
@@ -10331,7 +10332,7 @@ template <int Z> __attribute__((optimize("Os"))) static void PS1WaterUpdate()
                         if (t[0] < 15728640) {
                             PS1CreateTempObject(SPLASH, 0, P.xpos, t[7]);
                             N.drawOrder = 4;
-                            if constexpr (Z != 0)
+                            if (Z != 0)
                                 P.values[18] = 4;
                             if (Z != 2 || P.state != 1)
                                 PlaySfx(44, 0);
@@ -13169,15 +13170,15 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_PS1ARZWATER: // a whole sub: End follows
                 opcodeSize = 0;
-                PS1WaterUpdate<0>();
+                PS1WaterUpdate(0);
                 break;
             case FUNC_PS1CPZWATER: // a whole sub: End follows
                 opcodeSize = 0;
-                PS1WaterUpdate<1>();
+                PS1WaterUpdate(1);
                 break;
             case FUNC_PS1HPZWATER: // a whole sub: End follows
                 opcodeSize = 0;
-                PS1WaterUpdate<2>();
+                PS1WaterUpdate(2);
                 break;
             case FUNC_PS1HORIZONTALDOOR: {
                 // Metropolis's Horizontal Door update sub (stage object "Horizontal Door", up to 8 on screen), natively:

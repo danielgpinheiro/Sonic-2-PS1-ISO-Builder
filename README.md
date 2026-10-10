@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`6033dd62c140921272d25960e30d82781893dccef754aa7971cd5f90f4b76386`. Other versions of FFmpeg or psxavenc may encode the
+`aea564706f43bfceb176b9f7db116560b73e37def5aa1853df2333b63c0b60a7`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,6 +53,8 @@ sectors, the file index, and every file against its source.
 
 ## What's new (October 2026)
 
+- **Fixed: the special stage could stay blank** (a plain screen with only its music) when reached from a zone in the
+  previous update. It now has memory to spare again on every route in.
 - **Sonic 3 shields and the insta shield:** the original 2013 release's hidden shield setting is now in Options
   (Shields: Sonic 2, Sonic 2 + insta, Sonic 3, Sonic 3 + insta) and works with save files. It starts on Sonic 3 +
   insta shield: fire, bubble and lightning shields from the monitors, and Sonic's insta shield on a second jump press.
