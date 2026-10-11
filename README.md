@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`c9c5e28e3edb6ccc23eaaab16ccd6f0a7a5690dd58573b58f5d72523e7b1d50e`. Other versions of FFmpeg or psxavenc may encode the
+`46d859313a1e3319810d27573eaaf4a170d63332ce2165275e5da1a2bbb41fea`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,6 +53,8 @@ sectors, the file index, and every file against its source.
 
 ## What's new (October 2026)
 
+- **No freeze if the CD drive stops answering:** at a 1-up, the pause menu or a load, the game used to wait for the
+  drive forever; it now asks again after a few seconds and carries on.
 - **Delete a save file:** on the save select, press Select on a used file and confirm "Delete Saved Game?" (as the
   mobile versions' Delete button). The other files, the Time Attack records and the settings stay.
 - **Shields setting relabeled:** its four values now say what they do: Sonic 2, Sonic 3 + insta (the Sonic 3 shields
