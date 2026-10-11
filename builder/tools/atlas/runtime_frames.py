@@ -56,6 +56,16 @@ RUNTIME = {
     'Menu Control': {'add': [('LevelSelect/Text.gif', 0, 0, 128, 256)]},
     # LSelect: the zone button's middle, frame 1 / 4 = (5, 151 | 200) (value1 - 8) x 48, up to the right cap at x 221.
     'Zone Button': {'add': [('LevelSelect/Icons.gif', 5, 151, 216, 48), ('LevelSelect/Icons.gif', 5, 200, 216, 48)]},
+    # Sonic 1 (tester report 2026-10-10: Marble Zone's lava flickered). Zone02 (MZ): Lava Flow's update sub edits
+    # frames 0-3 to (value2, 405 | 438 | 471) 160 / 124 / 160 / 156 x 32, value2 = ((Sin + 512) >> 2 & 31) + 1 in
+    # 1..32, the row by the animation frame: x 1..191 on the three rows (the startup only saw row 405).
+    'Lava Flow': {'add': [('MZ/Objects.gif', 1, 405, 192, 32), ('MZ/Objects.gif', 1, 438, 192, 32),
+                          ('MZ/Objects.gif', 1, 471, 192, 32)]},
+    # No entry: Lava Geyser's column ((317 | 382, 1) 64 x h, inside the startup's 64 x 256 frames); Chained Crusher's
+    # chain ((308, 257 - h) 8 x h, bottom fixed, inside the startup's (308, 69) 8 x 188 while h <= 188) and Horiz
+    # Crusher's rod ((299 - d, 388) (d + 17) x 16, right edge fixed, inside (132, 388) 184 x 16 while d <= 167): whole
+    # rows / columns for them cost Zone02 8 more CLUTs (the BG strips' no longer fit); g_ps1AtlasDrawMiss stays 0 over
+    # MZ1-3 runs.
 }
 
 

@@ -118,6 +118,18 @@ def stage_sets(data, bcdir):
             for _, n, ops in walk_all(code, x, names, vars_):
                 if n == 'Equal' and ops[0][0] == 'var' and ops[1][0] == 'int':
                     stored.setdefault(var_key(ops[0]), set()).add(ops[1][1])
+        def consts(op):
+            # The values an operand can hold: a constant, or the constants stored into its variable anywhere in the
+            # stage's code; a LOCAL is a value in the code itself (its initial value). Object types reached this way
+            # (tester report 2026-10-10: Wing Fortress's boss creates its parts with types kept in LOCAL / GLOBAL
+            # variables, so their sounds were left out of Zone11's set).
+            if op[0] == 'int':
+                return [op[1]]
+            out = list(stored.get(var_key(op), ()))
+            name, idx = op[1]
+            if name == 'LOCAL' and idx is not None and idx[1] == 0 and 0 <= idx[2] < len(code):
+                out.append(code[idx[2]])
+            return out
         types = {t for t in placed_types(os.path.join(data, 'Stages', folder)) if 0 < t <= len(subs)}
         types.add(1)  # the player object (slot 0, set by the stage setup)
         sfx, seen_t, seen_f, todo = set(), set(), set(), list(types)
@@ -158,13 +170,13 @@ def stage_sets(data, bcdir):
                                 sys.exit('ERROR sfx_sets: %s: CallFunction %s not from a table (%s)' % (folder, ops[0][1][0],
                                                                                                      onames[t - 1]))
                         else:
-                            fq.extend(stored.get(var_key(ops[0]), ()))
-                    elif n == 'CreateTempObject' and ops[0][0] == 'int':
-                        todo.append(ops[0][1])
-                    elif n == 'ResetObjectEntity' and ops[1][0] == 'int':
-                        todo.append(ops[1][1])
-                    elif n == 'Equal' and ops[0][0] == 'var' and ops[0][1][0] == 'OBJECTTYPE' and ops[1][0] == 'int':
-                        todo.append(ops[1][1])
+                            fq.extend(consts(ops[0]))
+                    elif n == 'CreateTempObject':
+                        todo.extend(consts(ops[0]))
+                    elif n == 'ResetObjectEntity':
+                        todo.extend(consts(ops[1]))
+                    elif n == 'Equal' and ops[0][0] == 'var' and ops[0][1][0] == 'OBJECTTYPE':
+                        todo.extend(consts(ops[1]))
         out[folder] = sorted(sfx)
     return out, (gnames, gpaths), resident, sorted(set(notes))
 

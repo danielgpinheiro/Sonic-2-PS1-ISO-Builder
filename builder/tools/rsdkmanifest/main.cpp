@@ -150,6 +150,11 @@ int main(int argc, char **argv)
             for (int run = 0; run < (int)runs.size() * 2; ++run) {
                 int player = runs[run >> 1].first, region = run & 1;
                 setGlobal("options.region", region);
+                // Sonic 1's options.superStates (the 7th emerald; the PS1 menus set it for story play, default on):
+                // Credits Eggman, the Ending's Emeralds, the special stage's Chaos Emerald and Special Finish pick the
+                // 7th emerald's frame by it (tester report 2026-10-10: atlas misses on the credits' last screen).
+                // Both values with the region's runs (no object reads both); Sonic 2 has no such global.
+                setGlobal("options.superStates", region);
                 activeStageList   = list;
                 stageListPosition = pos;
                 playerListPos     = runs[run >> 1].second;
