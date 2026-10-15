@@ -44,42 +44,17 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`46d859313a1e3319810d27573eaaf4a170d63332ce2165275e5da1a2bbb41fea`. Other versions of FFmpeg or psxavenc may encode the
+`716ab70376d1d649d5fb65812fa7834c43c522849c8d2670f52aa036625f4334`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
 Before writing it, the builder verifies the image byte by byte: sector headers, EDC/ECC of every sector, the license
 sectors, the file index, and every file against its source.
 
-## What's new (October 2026)
+## What's new
 
-- **No freeze if the CD drive stops answering:** at a 1-up, the pause menu or a load, the game used to wait for the
-  drive forever; it now asks again after a few seconds and carries on.
-- **Delete a save file:** on the save select, press Select on a used file and confirm "Delete Saved Game?" (as the
-  mobile versions' Delete button). The other files, the Time Attack records and the settings stay.
-- **Shields setting relabeled:** its four values now say what they do: Sonic 2, Sonic 3 + insta (the Sonic 3 shields
-  in the monitors and the insta shield; the default), Random (every monitor random) and Random + insta (random with the
-  Sonic 3 shields and the insta shield). The earlier labels assumed a different meaning.
-- **Wing Fortress's boss sounds:** its hits, laser and explosions were silent; they play now. A few other sounds that
-  could be skipped play too (Hill Top, Oil Ocean, Hidden Palace's waterfalls, the special stage's jump).
-- **Fixed: the special stage could stay blank** (a plain screen with only its music) when reached from a zone in the
-  previous update. It now has memory to spare again on every route in.
-- **Sonic 3 shields and the insta shield:** the original 2013 release's hidden shield setting is now in Options
-  (Shields: Sonic 2, Sonic 3 + insta, Random, Random + insta) and works with save files. It starts on Sonic 3 +
-  insta shield: fire, bubble and lightning shields from the monitors, and Sonic's insta shield on a second jump press.
-  Time Attack keeps the classic shields.
-- **Faster special stages:** the half-pipe runs about 12 % faster. In emulators it now plays at about 74 % of full
-  speed, up from about 66 %.
-- **Wing Fortress at full speed:** it used to drop slightly below.
-- **Smoother busy zones:** Hidden Palace runs about 11 % faster and Aquatic Ruin about 7 %, Chemical Plant a little,
-  and every zone gains a little.
-- **Quicker underwater:** being underwater (the air countdown, bubbles and splashes) costs much less time, which is where
-  the water zones gain most. Hidden Palace's own stage logic is quicker too.
-- **Faster game scripts:** the engine now reads the game's script variables directly instead of looking each one up
-  every time, which speeds up every stage a little.
-- **More free memory** for the game, so loading the special stages is safer.
-- Apart from the new shield setting, nothing looks or plays differently: every change was checked frame by frame
-  against the previous version.
+Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): the disc's executable is now named
+`SONIC2.EXE` instead of `PSX.EXE`.
 
 ## What the PS1 version can do
 
