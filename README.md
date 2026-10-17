@@ -73,7 +73,7 @@ Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): t
 - No online features, 2-player versus, achievements or leaderboards.
 - No touch controls, dev menu, settings file or mods from the mobile version.
 - The special stages and two busy zones (Aquatic Ruin, Hidden Palace) run below full speed in emulators (the special
-  stages at about 73 %, those zones at about 85-90 %): the PS1 draws every frame instead of skipping some.
+  stages at about 74 %, those zones at about 85-90 %): the PS1 draws every frame instead of skipping some.
 - Tested in PCSX-Redux (including boot through a retail NTSC-U BIOS) and on a real PSone from a CD-R.
 
 ## Compromises to make this work
