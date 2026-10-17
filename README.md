@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`716ab70376d1d649d5fb65812fa7834c43c522849c8d2670f52aa036625f4334`. Other versions of FFmpeg or psxavenc may encode the
+`698b0d93a1b57a00011d798aed7bb2c2362fd6cb2c438f2e8476b5886e7a151d`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -73,7 +73,7 @@ Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): t
 - No online features, 2-player versus, achievements or leaderboards.
 - No touch controls, dev menu, settings file or mods from the mobile version.
 - The special stages and two busy zones (Aquatic Ruin, Hidden Palace) run below full speed in emulators (the special
-  stages at about 74 %, those zones at about 85-90 %): the PS1 draws every frame instead of skipping some.
+  stages at about 73-78 %, those zones at about 85-90 %): the PS1 draws every frame instead of skipping some.
 - Tested in PCSX-Redux (including boot through a retail NTSC-U BIOS) and on a real PSone from a CD-R.
 
 ## Compromises to make this work
