@@ -37,7 +37,8 @@ void PS1ChainSuspend();
 void PS1ChainResume();
 bool PS1ChainHasArena(); // false while suspended for a load (or the heap had no room): nothing can be chained
 // Arena size (words per parity) of the next allocation (PS1ChainResume); 0 = the normal 64 KB. An FMV
-// plays with tiny arenas and lends their heap to the video buffers (ps1/fmv.cpp).
+// plays with tiny arenas and lends their heap to the video buffers (ps1/fmv.cpp); the special stage (the Scene3D
+// block, RSDKv4/Scene3D.cpp) with 40 KB ones.
 void PS1ChainSetArenaWords(uint32_t words);
 int PS1ChainBufferY(); // VRAM Y of the buffer this frame draws into (0 or 256)
 

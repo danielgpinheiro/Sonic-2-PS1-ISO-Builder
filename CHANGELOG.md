@@ -3,6 +3,19 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Memory safety fix: the stack has its own area (October 2026)
+
+- **The main stack moved out of the heap** (port issue V4-102): the processor's working data (the stack) now lives in
+  a separate, fixed 8 KB area. Before, nothing kept it apart from the memory the game loads into, so with little
+  memory left a load could be placed on the stack and freeze the game. No such freeze was seen in normal play, but the
+  special stage's load had only about 5 KB to spare, and the port's tests froze it there with a few KB less.
+- When memory runs out, a request for more now fails cleanly instead of being handed the stack's memory.
+- **More room in the special stages:** their two drawing buffers are 40 KB each instead of 64 KB (a stage fills at
+  most about 24 KB of one), so the special stage's load now has about 13 KB to spare, after paying for the stack's own
+  area. The zones keep about 80 KB free (8 KB less than before: the stack's area).
+- Checked with the port's automated tests in PCSX-Redux and DuckStation. Not yet tested on a console.
+- The image's SHA-256 changes (the new value is in the README's Output section).
+
 ## Faster special stages (October 2026)
 
 - **Faster special stages:** stage 1 from about 44 to about 47 frames a second in emulators, stage 7 (the one with the
