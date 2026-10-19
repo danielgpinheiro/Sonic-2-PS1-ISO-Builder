@@ -3,6 +3,20 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Faster special stages, steadier rotated sprites (October 2026)
+
+- **Special stages run faster:** the code that sorts and draws the half-pipe and turns its 3D points into screen
+  positions now runs as hand-written assembly. Special stage 1 needs about 10 % less CPU time a frame (335.6 -> 302.4
+  of a frame's 262 scanlines in PCSX-Redux), stage 7 about 9 % less (356.0 -> 324.3). They still run a little below full
+  speed; the work continues. The picture is the same: every change was checked frame by frame.
+- **Steadier rotated sprites:** a rotated sprite's picture no longer bends slightly along its diagonal (the bend
+  changed with every angle: Sonic in loops and on quarter pipes, rotating objects, the special stages' messages). Each rotated sprite is now
+  drawn as an exact parallelogram.
+- Rotated sprites flipped vertically are no longer drawn mirrored left-to-right; they follow the original game's rule.
+- Checked for every frame of the player animations at every angle, facing left and right, with the port's automated
+  tests. Not yet tested on a console.
+- The image's SHA-256 changes (the new value is in the README's Output section).
+
 ## Memory safety fix: the stack has its own area (October 2026)
 
 - **The main stack moved out of the heap** (port issue V4-102): the processor's working data (the stack) now lives in

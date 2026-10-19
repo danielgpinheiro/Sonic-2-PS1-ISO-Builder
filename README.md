@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`5841f0dacda5803edb922e6a457ffa3fd96ff15a5256be0ff8f1298d2c080333`. Other versions of FFmpeg or psxavenc may encode the
+`78ecf31b747dc6ed3a81d68991914c0fdd2d7146e753aa09c3044c4474ac774e`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,8 +53,8 @@ sectors, the file index, and every file against its source.
 
 ## What's new
 
-Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): a memory safety fix (the game's stack
-now has its own area, so loads can no longer run into it).
+Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): faster special stages, and rotated
+sprites no longer bend along their diagonal.
 
 ## What the PS1 version can do
 
