@@ -221,6 +221,12 @@ void ProcessObjects()
         // process flag stays false; XBOUNDS_DESTROY would blank it again): skip it (Sonic CD port, docs/28).
         if (entity->type == OBJ_TYPE_BLANKOBJECT)
             continue;
+#if PS1_GAME != 1
+        // An inactive slot does nothing either (the switch below leaves its flag false; objectEntityPos is set again
+        // before any script runs): the special stage's ~700 rings and bombs the pipe hasn't reached (docs/43 C7)
+        if (entity->priority == PRIORITY_INACTIVE)
+            continue;
+#endif
         objectEntityPos = pos;
         int x = entity->xpos >> 16;
         int y = entity->ypos >> 16;
