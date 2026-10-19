@@ -65,9 +65,14 @@ extern ScriptFunction scriptFunctionList[FUNCTION_COUNT];
 
 #if RETRO_PLATFORM == RETRO_PS1
 int PS1ScriptBigValue(int pos); // Script.cpp: the side table (binary search)
+#if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+#define PS1_SCRIPTCODE_INLINE __attribute__((always_inline)) // Sonic 2: -Os natives called it out of line (docs/43)
+#else
+#define PS1_SCRIPTCODE_INLINE
+#endif
 struct PS1ScriptCode {
     short slot[SCRIPTCODE_COUNT];
-    inline int operator[](int i) const
+    PS1_SCRIPTCODE_INLINE inline int operator[](int i) const
     {
         int v = slot[i];
         return v != PS1_SCRIPT_BIG ? v : PS1ScriptBigValue(i);

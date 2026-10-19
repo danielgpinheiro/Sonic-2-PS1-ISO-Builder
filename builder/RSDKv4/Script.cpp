@@ -40,11 +40,71 @@ static PS1ScriptBig s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT + 1];
 static int s_ps1ScriptBigCount = 0;
 static ushort s_ps1BigBucket[PS1_BIGBUCKET_COUNT];
 static bool s_ps1BigBucketDirty = true;
+#if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2: the scripts' runtime insertions go to a second sorted run at the top of the same array, growing down
+// (logical index L, ascending by slot, at s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT - L]: the largest slot lowest, so the
+// common ascending insertions and a load's truncation move nothing): an insertion moved the loaded table's tail (up to ~40 KB: the
+// special stage's segment build fills six 40-entry tables near the code's start, ~50 hblanks on every 4th frame early
+// in a stage, docs/43) and rebuilt the bucket index. The two runs hold what the one table held, with the same capacity
+// (an insertion or a load's append fails when count + rtCount reaches PS1_SCRIPTBIG_COUNT, as count did), and a load
+// drops the entries at or past its position from both: every read gives the same value.
+#define PS1_BIG_RT 1
+static int s_ps1BigRtCount = 0;
+static inline PS1ScriptBig &PS1BigRtAt(int L) { return s_ps1ScriptBig[PS1_SCRIPTBIG_COUNT - L]; }
+// The runtime run's bucket index: s_ps1BigRtBucket[b] = the first runtime entry with .pos >= b << 10 (a zone reads its
+// runtime slots every frame: a binary search over the whole run cost ~1 % of a frame). An insertion adds 1 to the
+// buckets after its own, a load's truncation clamps them, a reset zeroes them.
+#define PS1_RTB_SHIFT 10
+#define PS1_RTB_COUNT ((SCRIPTCODE_COUNT >> PS1_RTB_SHIFT) + 2)
+static ushort s_ps1BigRtBucket[PS1_RTB_COUNT];
+// Code slot -> runtime index for the slots read lately (a zone reads the same ~250 runtime slots every frame). Each
+// entry's key is the slot with the cache's generation above bit 17 (slots < 2^17); whenever runtime indices move (an
+// insertion, a load's truncation, a reset) the generation moves on, so a hit is always the slot's current entry (a
+// load's insertions cost one store each, not a clear).
+#define PS1_RTC_N 128
+static_assert(SCRIPTCODE_COUNT <= (1 << 17), "PS1BigRtCached keys: slot | generation << 17");
+struct PS1BigRtCached {
+    uint key;
+    int idx;
+};
+static PS1BigRtCached s_ps1BigRtCache[PS1_RTC_N];
+static uint s_ps1BigRtGen = 1u << 17; // never 0 above bit 17: the zeroed entries never match
+static void PS1BigRtCacheClear()
+{
+    s_ps1BigRtGen += 1u << 17;
+    if (s_ps1BigRtGen == 0) { // wrapped (every 32,768 moves): the old keys could match again
+        for (int i = 0; i < PS1_RTC_N; ++i) s_ps1BigRtCache[i].key = 0;
+        s_ps1BigRtGen = 1u << 17;
+    }
+}
+static void PS1BigRtReset()
+{
+    s_ps1BigRtCount = 0;
+    memset(s_ps1BigRtBucket, 0, sizeof(s_ps1BigRtBucket));
+    PS1BigRtCacheClear();
+}
+static int PS1BigRtFind(int pos) // the first runtime entry with .pos >= pos
+{
+    const int b = pos >> PS1_RTB_SHIFT;
+    int lo = s_ps1BigRtBucket[b], hi = s_ps1BigRtBucket[b + 1];
+    while (lo < hi) {
+        int m = (lo + hi) >> 1;
+        if (PS1BigRtAt(m).pos < pos)
+            lo = m + 1;
+        else
+            hi = m;
+    }
+    return lo;
+}
+#define PS1_BIG_TOTAL (s_ps1ScriptBigCount + s_ps1BigRtCount)
+#else
+#define PS1_BIG_TOTAL (s_ps1ScriptBigCount)
+#endif
 static void PS1ScriptBigChanged()
 {
     s_ps1ScriptBig[s_ps1ScriptBigCount].pos = 0x7FFFFFFF;
     s_ps1BigBucketDirty                     = true;
-    g_ps1ScriptBigCount                     = s_ps1ScriptBigCount;
+    g_ps1ScriptBigCount                     = PS1_BIG_TOTAL;
 }
 static void PS1ScriptBigIndex()
 {
@@ -66,7 +126,21 @@ static inline int PS1ScriptBigFind(int pos) // index of the first entry with .po
 }
 int PS1ScriptBigValue(int pos)
 {
+#ifdef PS1_BIG_RT
+    PS1BigRtCached &c = s_ps1BigRtCache[pos & (PS1_RTC_N - 1)];
+    if (c.key == ((uint)pos | s_ps1BigRtGen))
+        return PS1BigRtAt(c.idx).value;
+#endif
     int k = PS1ScriptBigFind(pos);
+#ifdef PS1_BIG_RT
+    if (s_ps1ScriptBig[k].pos != pos && s_ps1BigRtCount) {
+        int j = PS1BigRtFind(pos);
+        if (j < s_ps1BigRtCount && PS1BigRtAt(j).pos == pos) {
+            c.key = (uint)pos | s_ps1BigRtGen, c.idx = j;
+            return PS1BigRtAt(j).value;
+        }
+    }
+#endif
     return s_ps1ScriptBig[k].pos == pos ? s_ps1ScriptBig[k].value : PS1_SCRIPT_BIG; // not stored: the literal value
 }
 __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
@@ -78,10 +152,23 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
             scriptCode.slot[pos] = (short)value;
             return;
         }
-        if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT) {
+        if (PS1_BIG_TOTAL == PS1_SCRIPTBIG_COUNT) {
             g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
             return;
         }
+#ifdef PS1_BIG_RT
+        const int j = PS1BigRtFind(pos), n = s_ps1BigRtCount;
+        PS1ScriptBig *low = &PS1BigRtAt(n - 1); // the entries past pos (logical j .. n - 1) one down, the new one at j
+        memmove(low - 1, low, (n - j) * sizeof(PS1ScriptBig));
+        PS1BigRtAt(j).pos   = pos;
+        PS1BigRtAt(j).value = value;
+        ++s_ps1BigRtCount;
+        for (int b = (pos >> PS1_RTB_SHIFT) + 1; b < PS1_RTB_COUNT; ++b) ++s_ps1BigRtBucket[b];
+        PS1BigRtCacheClear(); // the indices at or past j moved
+        g_ps1ScriptBigCount  = PS1_BIG_TOTAL;
+        scriptCode.slot[pos] = PS1_SCRIPT_BIG;
+        return;
+#endif
         int k = PS1ScriptBigFind(pos);
         memmove(&s_ps1ScriptBig[k + 1], &s_ps1ScriptBig[k], (s_ps1ScriptBigCount - k) * sizeof(PS1ScriptBig));
         s_ps1ScriptBig[k].pos   = pos;
@@ -91,12 +178,37 @@ __attribute__((noinline)) void PS1ScriptWrite(int pos, int value)
         scriptCode.slot[pos] = PS1_SCRIPT_BIG;
         return;
     }
+#ifdef PS1_BIG_RT
+    PS1BigRtCached &c = s_ps1BigRtCache[pos & (PS1_RTC_N - 1)];
+    if (c.key == ((uint)pos | s_ps1BigRtGen)) {
+        PS1BigRtAt(c.idx).value = value;
+        return;
+    }
+#endif
     int k = PS1ScriptBigFind(pos);
-    if (s_ps1ScriptBig[k].pos == pos)
+    if (s_ps1ScriptBig[k].pos == pos) {
         s_ps1ScriptBig[k].value = value;
+        return;
+    }
+#ifdef PS1_BIG_RT
+    int j = PS1BigRtFind(pos);
+    if (j < s_ps1BigRtCount && PS1BigRtAt(j).pos == pos)
+        PS1BigRtAt(j).value = value;
+#endif
 }
 static bool PS1ScriptStore(int pos, int value)
 {
+#ifdef PS1_BIG_RT
+    if (s_ps1BigRtCount && PS1BigRtAt(s_ps1BigRtCount - 1).pos >= pos) { // the runtime run's entries at or past pos too
+        const int j     = PS1BigRtFind(pos); // the ones under pos stay where they are
+        s_ps1BigRtCount = j;
+        for (int b = 0; b < PS1_RTB_COUNT; ++b)
+            if (s_ps1BigRtBucket[b] > j)
+                s_ps1BigRtBucket[b] = (ushort)j;
+        PS1BigRtCacheClear();
+        g_ps1ScriptBigCount = PS1_BIG_TOTAL;
+    }
+#endif
     if (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) {
         while (s_ps1ScriptBigCount && s_ps1ScriptBig[s_ps1ScriptBigCount - 1].pos >= pos) --s_ps1ScriptBigCount;
         PS1ScriptBigChanged();
@@ -105,7 +217,7 @@ static bool PS1ScriptStore(int pos, int value)
         scriptCode.slot[pos] = (short)value;
         return true;
     }
-    if (s_ps1ScriptBigCount == PS1_SCRIPTBIG_COUNT)
+    if (PS1_BIG_TOTAL == PS1_SCRIPTBIG_COUNT)
         return false;
     scriptCode.slot[pos]                         = PS1_SCRIPT_BIG;
     s_ps1ScriptBig[s_ps1ScriptBigCount].pos      = pos;
@@ -223,6 +335,14 @@ struct ScriptVariableInfo {
     char value[0x20];
 };
 
+#if RETRO_PLATFORM == RETRO_PS1 && !RETRO_USE_COMPILER && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Without the compiler only the operand counts are read (s_ps1OpSize): a constant byte each, not a 36-byte entry built
+// at boot (11 KB of .bss + 5 KB of start-up code, the zones' load-peak headroom)
+struct FunctionInfo {
+    constexpr FunctionInfo(const char *, int opSize) : opcodeSize(opSize) {}
+    byte opcodeSize;
+};
+#else
 struct FunctionInfo {
     FunctionInfo()
     {
@@ -242,6 +362,7 @@ struct FunctionInfo {
 #endif
     int opcodeSize;
 };
+#endif
 
 #if RETRO_USE_COMPILER
 const char variableNames[][0x20] = {
@@ -817,6 +938,16 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1CPZWater", 0),
     FunctionInfo("PS1HPZWater", 0),
     FunctionInfo("PS1SpecialBomb", 0),
+    // Sonic 2 only (Sonic 1's EXE stays as it was); the bytecode tools (RETRO_USE_COMPILER on) list them
+#if PS1_GAME != 1 || RETRO_USE_COMPILER
+    FunctionInfo("PS1TextMsgUpdate", 0),
+    FunctionInfo("PS1TextMsgDraw", 0),
+    FunctionInfo("PS1SpecialHUDDraw", 0),
+    FunctionInfo("PS1SpecialCtrlP1", 0),
+    FunctionInfo("PS1SpecialCtrlP2", 0),
+    FunctionInfo("PS1SpLoseRing", 0),
+    FunctionInfo("PS1SpLoseRingDraw", 0),
+#endif
 #endif
 };
 
@@ -1387,6 +1518,15 @@ enum ScrFunc {
     FUNC_PS1CPZWATER,
     FUNC_PS1HPZWATER,
     FUNC_PS1SPECIALBOMB,
+#if PS1_GAME != 1 || RETRO_USE_COMPILER
+    FUNC_PS1TEXTMSGUPDATE,
+    FUNC_PS1TEXTMSGDRAW,
+    FUNC_PS1SPECIALHUDDRAW,
+    FUNC_PS1SPECIALCTRLP1,
+    FUNC_PS1SPECIALCTRLP2,
+    FUNC_PS1SPLOSERING,
+    FUNC_PS1SPLOSERINGDRAW,
+#endif
 #endif
     FUNC_MAX_CNT
 };
@@ -3547,6 +3687,9 @@ static bool PS1LoadScriptImage()
     scriptCodePos       = codePos;
     jumpTablePos        = jumpPos;
     s_ps1ScriptBigCount = bigCount;
+#ifdef PS1_BIG_RT
+    PS1BigRtReset(); // the image replaces every entry
+#endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = scripts + 1;
     s_ps1FunctionEnd = fns;
@@ -3846,6 +3989,9 @@ void ClearScriptData()
 #if RETRO_PLATFORM == RETRO_PS1
     memset(&scriptCode, 0, sizeof(scriptCode));
     s_ps1ScriptBigCount = 0;
+#ifdef PS1_BIG_RT
+    PS1BigRtReset();
+#endif
     PS1ScriptBigChanged();
     s_ps1ScriptEnd   = 1;
     s_ps1FunctionEnd = 0;
@@ -9167,6 +9313,15 @@ static void PS1InvisibleBlockUpdate()
 // the special-stage natives touch them in many places (code size, docs/30 phase 7.2b).
 __attribute__((noinline)) static Vertex &PS1Vertex(int i) { return vertexBuffer[PS1_VTX(i)]; }
 __attribute__((noinline)) static Face &PS1Face(int i) { return faceBuffer[PS1_FACE(i)]; }
+// n consecutive vertices from i as PS1Vertex gives them, with one call when all are plain in-range indices (the last
+// one's: the high-water marks only grow, so they end the same; below 0xF00 nothing is remapped); otherwise null, and
+// the caller takes PS1Vertex for each (docs/43: the special stage's rings and bombs, ~300 calls a frame)
+static inline Vertex *PS1VertexRun(int i, int n)
+{
+    if (i >= 0 && i + n <= g_ps1VtxCap && i + n <= 0xF00)
+        return &PS1Vertex(i + n - 1) - (n - 1);
+    return nullptr;
+}
 // Scene3D counts as the VM writes them (VAR_SCENE3DVERTEXCOUNT / FACECOUNT: high-water marks, then mapped/clamped).
 static inline void PS1SetVertexCount(int n)
 {
@@ -9338,6 +9493,20 @@ __attribute__((optimize("Os"))) static void PS1HalfpipeSegment()
     ap[0] = L(930);
     get(L(929), t[0], t[1]);
     t[0]++;
+    { // the whole run at once when every index is in the table and the vertices are plain in-range ones (PS1VertexRun):
+      // the same values and high-water marks without a bounds-checked call and two range tests per value (docs/43:
+      // ~180 vertices a segment, ~11 hblanks of the segment frame's spike)
+        const int table = L(929), n = t[1], len = L(table);
+        Vertex *run = (n > 0 && t[0] >= 0 && t[0] + 3 * n <= len) ? PS1VertexRun(ap[0], n) : nullptr;
+        if (run) {
+            for (int k = 0, pos = table + 1 + t[0]; k < n; ++k, pos += 3) {
+                run[k].x = scriptCode[pos];
+                run[k].y = scriptCode[pos + 1];
+                run[k].z = scriptCode[pos + 2];
+            }
+            t[0] += 3 * n, ap[0] += n, t[1] = 0;
+        }
+    }
     while (t[1] > 0) { // the segment's vertices from its table
         int table = L(929);
         Vertex &q = V(ap[0]);
@@ -10496,7 +10665,8 @@ static void PS1SpecialRingUpdate()
         Face &f = PS1Face(ap[1]);
         f.flag  = 6;
         f.a     = ap[0];
-        Vertex *q = &PS1Vertex(ap[0]);
+        Vertex *const run = PS1VertexRun(ap[0], 4);
+        Vertex *q         = run ? run : &PS1Vertex(ap[0]);
         q->x    = v[11];
         q->y    = v[12];
         q->z    = v[13];
@@ -10504,7 +10674,7 @@ static void PS1SpecialRingUpdate()
         q->v    = 50;
         ap[0]++;
         f.b  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 1 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10513,7 +10683,7 @@ static void PS1SpecialRingUpdate()
         q->v = me.scale;
         ap[0]++;
         f.c  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 2 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10521,7 +10691,7 @@ static void PS1SpecialRingUpdate()
         q->v = 16;
         ap[0]++;
         f.d  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 3 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10533,7 +10703,8 @@ static void PS1SpecialRingUpdate()
     Face &f = PS1Face(ap[1]);
     f.flag  = 5;
     f.a     = ap[0];
-    Vertex *q = &PS1Vertex(ap[0]);
+    Vertex *const run = PS1VertexRun(ap[0], 4);
+    Vertex *q         = run ? run : &PS1Vertex(ap[0]);
     q->x    = v[4];
     q->y    = v[5];
     q->z    = v[6];
@@ -10543,7 +10714,7 @@ static void PS1SpecialRingUpdate()
         q->v = scriptCode[13802 + G[19] + 1];
     ap[0]++;
     f.b  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 1 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10552,7 +10723,7 @@ static void PS1SpecialRingUpdate()
     q->v = me.scale;
     ap[0]++;
     f.c  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 2 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10560,7 +10731,7 @@ static void PS1SpecialRingUpdate()
     q->v = 16;
     ap[0]++;
     f.d  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 3 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10633,7 +10804,8 @@ static void PS1SpecialBombUpdate()
         Face &f = PS1Face(ap[1]);
         f.flag  = 6;
         f.a     = ap[0];
-        Vertex *q = &PS1Vertex(ap[0]);
+        Vertex *const run = PS1VertexRun(ap[0], 4);
+        Vertex *q         = run ? run : &PS1Vertex(ap[0]);
         q->x    = v[11];
         q->y    = v[12];
         q->z    = v[13];
@@ -10641,7 +10813,7 @@ static void PS1SpecialBombUpdate()
         q->v    = 50;
         ap[0]++;
         f.b  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 1 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10659,7 +10831,7 @@ static void PS1SpecialBombUpdate()
         q->v = me.scale;
         ap[0]++;
         f.c  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 2 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10667,7 +10839,7 @@ static void PS1SpecialBombUpdate()
         q->v = 16;
         ap[0]++;
         f.d  = ap[0];
-        q    = &PS1Vertex(ap[0]);
+        q    = run ? run + 3 : &PS1Vertex(ap[0]);
         q->x = v[11];
         q->y = v[12];
         q->z = v[13];
@@ -10679,7 +10851,8 @@ static void PS1SpecialBombUpdate()
     Face &f = PS1Face(ap[1]);
     f.flag  = 5;
     f.a     = ap[0];
-    Vertex *q = &PS1Vertex(ap[0]);
+    Vertex *const run = PS1VertexRun(ap[0], 4);
+    Vertex *q         = run ? run : &PS1Vertex(ap[0]);
     q->x    = v[4];
     q->y    = v[5];
     q->z    = v[6];
@@ -10687,7 +10860,7 @@ static void PS1SpecialBombUpdate()
     q->v    = 50;
     ap[0]++;
     f.b  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 1 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10705,7 +10878,7 @@ static void PS1SpecialBombUpdate()
     q->v = t[1];
     ap[0]++;
     f.c  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 2 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10713,7 +10886,7 @@ static void PS1SpecialBombUpdate()
     q->v = 16;
     ap[0]++;
     f.d  = ap[0];
-    q    = &PS1Vertex(ap[0]);
+    q    = run ? run + 3 : &PS1Vertex(ap[0]);
     q->x = v[4];
     q->y = v[5];
     q->z = v[6];
@@ -10761,6 +10934,697 @@ static void PS1SpecialBombUpdate()
                 }
                 PlaySfx(45, 0);
             }
+        }
+    }
+}
+
+// The special stage's Text Message object (its messages: "GET n RINGS", "COOL!", the ring counts, and the letters
+// flying off when a message ends; docs/43: 11 letters were ~65 hblanks of VM a frame), natively: one statement per
+// script instruction, in order. Special function 12 (the text, one sprite a letter: every frame a message shows) is
+// transcribed inline; function 13 (spawns the letters: once a message) runs in the VM (PS1CallScriptFunction). Patched in
+// only when both subs, their jump-table entries and function 12 match TEXTMSG_* (tools/scripts/patch_bytecode.py).
+volatile uint32_t g_ps1TextMsgCover = 0; // GDB: update cases (bits 0-9), draw cases (10-19), text kinds (20 '!', 21-23 digits,
+                                         // 24 '&', 25 '.', 26 letter, 27 space / other)
+__attribute__((optimize("Os"))) static void PS1TextMsgReset(int pos) // ResetObjectEntity <pos> 0 0 0 0
+{
+    Entity *newEnt = &PS1_OBJ(pos);
+    memset(newEnt, 0, sizeof(Entity));
+    newEnt->type               = 0;
+    newEnt->propertyValue      = 0;
+    newEnt->xpos               = 0;
+    newEnt->ypos               = 0;
+    newEnt->direction          = FLIP_NONE;
+    newEnt->priority           = PRIORITY_BOUNDS;
+    newEnt->drawOrder          = 3;
+    newEnt->scale              = 512;
+    newEnt->inkEffect          = INK_NONE;
+    newEnt->objectInteractions = true;
+    newEnt->visible            = true;
+    newEnt->tileCollisions     = true;
+}
+__attribute__((optimize("Os"))) static void PS1TextMsgText(Entity &e) // CallFunction 12: the text of row OBJECTVALUE1 at OBJECTYPOS, centred
+{
+    int *t         = scriptEng.temp;
+    TextMenu *menu = &gameMenu[0];
+    e.values[3]    = menu->entrySize[e.values[1]]; // GetTextInfo OBJECTVALUE3 0 TEXTINFO_TEXTSIZE OBJECTVALUE1 0
+    e.values[2]    = e.values[3];
+    e.values[2] <<= 2;
+    e.values[2] = -e.values[2];
+    e.values[2] += SCREEN_CENTERX;
+    e.values[2] += 4;
+    t[0] = 0;
+    while (e.values[3] > 0) {
+        t[1] = menu->textData[menu->entryStart[e.values[1]] + t[0]]; // GetTextInfo TEMP1 0 TEXTINFO_TEXTDATA OBJECTVALUE1 TEMP0
+        g_ps1TextMsgCover = g_ps1TextMsgCover
+                            | (1u << (t[1] == 33 ? 20 : t[1] >= 35 && t[1] <= 37 ? 21 + t[1] - 35 : t[1] == 38 ? 24 : t[1] == 46 ? 25
+                                      : (t[1] > 64 && t[1] < 91) || (t[1] > 96 && t[1] < 123) ? 26 : 27));
+        switch (t[1]) {
+            case 33: // '!'
+                PS1DrawSpriteScreenXY(37, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 35: // '#': hundreds
+                t[2] = e.values[4];
+                t[2] /= 100;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 36: // '$': tens
+                t[2] = e.values[4];
+                t[2] %= 100;
+                t[2] /= 10;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 37: // '%': units
+                t[2] = e.values[4];
+                t[2] %= 10;
+                PS1DrawSpriteScreenXY(t[2], e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 38: // '&'
+                PS1DrawSpriteScreenXY(38, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            case 46: // '.'
+                PS1DrawSpriteScreenXY(36, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+            default: // a letter (A-Z / a-z -> frames 10-35), else a space
+                e.frame = 0;
+                if (t[1] > 64) {
+                    if (t[1] < 91) {
+                        e.frame = t[1];
+                        e.frame = e.frame - 55;
+                    }
+                }
+                if (t[1] > 96) {
+                    if (t[1] < 123) {
+                        e.frame = t[1];
+                        e.frame = e.frame - 87;
+                    }
+                }
+                if (e.frame > 0)
+                    PS1DrawSpriteScreenXY(e.frame, e.values[2], e.ypos);
+                e.values[2] += 8;
+                break;
+        }
+        ++t[0];
+        --e.values[3];
+    }
+}
+__attribute__((optimize("Os"))) static void PS1TextMsgUpdate()
+{
+    int *t    = scriptEng.temp;
+    Entity &e = objectEntityList[objectEntityPos];
+    if (e.propertyValue < 10)
+        g_ps1TextMsgCover = g_ps1TextMsgCover | (1u << e.propertyValue);
+    switch (e.propertyValue) {
+        case 0:
+        case 4:
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 1:
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else {
+                e.values[8] = 0;
+                e.values[1] = 1;
+                e.ypos      = 116;
+                e.angle     = 96;
+                PS1CallScriptFunction(13, 0);
+                e.values[8] = 1;
+                e.ypos += 22;
+                e.values[1] = 2;
+                e.angle     = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 2:
+        case 5:
+            if (e.values[0] < 90)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+            }
+            break;
+        case 3: // the ring count still needed, blinking until reached (GLOBAL 50: the second player's rings count)
+            if (globalVariables[50] == 1) {
+                t[0] = PS1_OBJ(2).values[0];
+                t[0] += PS1_OBJ(3).values[0];
+            }
+            else
+                t[0] = PS1_OBJ(2).values[0];
+            { // GetTableValue TEMP1 LOCAL[3] LOCAL[4]
+                int arrPos = scriptCode[3];
+                if (arrPos >= 0) {
+                    int pos = scriptCode[4];
+                    if (arrPos < scriptCode[pos])
+                        t[1] = scriptCode[pos + arrPos + 1];
+                }
+            }
+            if (t[0] < t[1])
+                e.animationTimer = 0;
+            else {
+                if (e.animationTimer < 30)
+                    ++e.animationTimer;
+            }
+            scriptEng.checkResult = t[0] < t[1];
+            t[2]                  = scriptEng.checkResult;
+            scriptEng.checkResult = e.animationTimer < 30;
+            t[2] |= scriptEng.checkResult;
+            if (t[2] == 1) {
+                e.visible = (e.values[0] & (1 << 2)) >> 2; // GetBit OBJECTVISIBLE OBJECTVALUE0 2
+                ++e.values[0];
+                e.values[0] &= 7;
+                e.values[4] = t[1];
+                e.values[4] -= t[0];
+                if (e.values[4] < 0)
+                    e.values[4] = 0;
+            }
+            else
+                e.visible = 0;
+            break;
+        case 6:
+        case 7:
+        case 8:
+            if (e.values[0] < 90)
+                ++e.values[0];
+            else {
+                e.angle = 96;
+                PS1CallScriptFunction(13, 0);
+                PS1TextMsgReset(objectEntityPos);
+                if (scriptCode[3] < 3) {
+                    PS1_OBJ(2).values[0] = 0;
+                    PS1_OBJ(3).values[0] = 0;
+                }
+            }
+            break;
+        case 9: // a letter flying off
+            e.xpos += e.xvel;
+            e.ypos += e.yvel;
+            e.scale += e.values[6];
+            e.rotation += e.values[7];
+            e.rotation &= 511;
+            e.speed -= 32768;
+            ++e.values[6];
+            e.yvel = Cos512(e.angle);
+            e.yvel *= e.speed;
+            e.yvel >>= 9;
+            e.xvel = Sin512(e.angle);
+            e.xvel *= e.speed;
+            e.xvel >>= 9;
+            if (e.values[0] < 120)
+                ++e.values[0];
+            else
+                e.type = 0;
+            break;
+    }
+}
+#if PS1_GAME != 1
+// The special stage's HUD draw sub (every frame: each player's ring counter, function 10, and with Sonic & Tails their
+// total; in a 2-player game the counters and the win icons), natively: one statement per script instruction, in order
+// (t = temps, ap = array positions, G = globals, me = the HUD; function 10 inline: its listing is checked with the
+// sub's). Patched in only when the sub, its jump-table entries and function 10 match SPHUD_DRAW_SIG / SPHUD_FN10_SIG
+// (docs/43: ~10 hblanks a frame in the VM with Sonic & Tails).
+__attribute__((optimize("Os"))) static void PS1SpecialHUDDraw()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition, *G = globalVariables;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto counter = [&]() { // function 10: the icon (OBJECTFRAME) at OBJECTVALUE2, the rings of player ARRAYPOS6
+        PS1DrawSpriteScreenXY(me.frame, v[2], 20);
+        v[2] += 44;
+        if (PS1_OBJ(ap[6]).values[0] > 99) {
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] /= 100;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 100;
+            t[1] /= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+        }
+        else if (PS1_OBJ(ap[6]).values[0] > 9) {
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] /= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            v[2] += 8;
+            t[1] = PS1_OBJ(ap[6]).values[0];
+            t[1] %= 10;
+            PS1DrawSpriteScreenXY(t[1], v[2], 29);
+        }
+        else {
+            PS1DrawSpriteScreenXY(PS1_OBJ(ap[6]).values[0], v[2], 29);
+        }
+    };
+    if (G[13] == 0) {
+        if (G[50] == 0) {
+            ap[6] = 2;
+            v[2]  = SCREEN_CENTERX;
+            v[2] -= 24;
+            me.frame = playerListPos;
+            me.frame += 10;
+            counter();
+        }
+        else {
+            ap[6] = 2;
+            v[2]  = SCREEN_CENTERX;
+            v[2] -= 104;
+            me.frame = playerListPos;
+            me.frame += 10;
+            counter();
+            ap[6] = 3;
+            v[2]  = SCREEN_CENTERX;
+            v[2] += 48;
+            me.frame = 11;
+            counter();
+            v[1] = PS1_OBJ(2).values[0];
+            v[1] += PS1_OBJ(3).values[0];
+            PS1DrawSpriteScreenXY(13, SCREEN_CENTERX, 21);
+            v[2] = SCREEN_CENTERX;
+            if (v[1] > 99) {
+                v[2] -= 12;
+                t[1] = v[1];
+                t[1] /= 100;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 100;
+                t[1] /= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            }
+            else if (v[1] > 9) {
+                v[2] -= 8;
+                t[1] = v[1];
+                t[1] /= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+                v[2] += 8;
+                t[1] = v[1];
+                t[1] %= 10;
+                PS1DrawSpriteScreenXY(t[1], v[2], 29);
+            }
+            else {
+                v[2] -= 4;
+                PS1DrawSpriteScreenXY(v[1], v[2], 29);
+            }
+        }
+    }
+    else {
+        ap[6] = 2;
+        v[2]  = SCREEN_CENTERX;
+        v[2] -= 104;
+        me.frame = playerListPos;
+        me.frame += 10;
+        counter();
+        t[0] = 0;
+        v[2] = SCREEN_CENTERX;
+        v[2] -= 96;
+        while (t[0] < PS1_OBJ(2).values[19]) {
+            PS1DrawSpriteScreenXY(14, v[2], 45);
+            v[2] += 16;
+            t[0]++;
+        }
+        ap[6] = 3;
+        v[2]  = SCREEN_CENTERX;
+        v[2] += 48;
+        me.frame = G[109];
+        me.frame += 10;
+        counter();
+        t[0] = 0;
+        v[2] = SCREEN_CENTERX;
+        v[2] += 56;
+        while (t[0] < PS1_OBJ(3).values[19]) {
+            PS1DrawSpriteScreenXY(14, v[2], 45);
+            v[2] += 16;
+            t[0]++;
+        }
+    }
+}
+// The special stage's player controls (Special function 2: the first player's touch keys, ProcessObjectControl, a
+// demo's input table; function 3: Tails's CPU, player 1's input delayed through six 16-bit shift registers in locals
+// 7438-7443; both then the blink timer), natively: one statement per script instruction, in order (t = temps, cr = the
+// check result, ap = array positions, G = globals, E() = the running entity, re-read as the VM re-reads
+// objectEntityPos; key variables with the VM's inputCheck, their array index being the running entity). Function
+// bodies: the VM's `return` after the opcode ends the call. Patched in only when each function and its jump-table
+// entries match SPCTRL1_FN_SIG / SPCTRL2_FN_SIG (docs/43: ~45 VM instructions a frame for Tails, 25 for the first
+// player; the shift registers hold up to 0xFFFF, so every one of Tails's goes through the big-value table).
+__attribute__((optimize("Os"))) static void PS1SpecialCtrlP1()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr = scriptEng.checkResult;
+    int *G  = globalVariables;
+    auto E  = []() -> Entity & { return objectEntityList[objectEntityPos]; };
+    auto ic = []() { return !(forceUseScripts || Engine.usingOrigins) || objectEntityPos <= 1; }; // inputCheck
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    auto touch = [&](int l, int tp, int r, int b) { // FUNC_CHECKTOUCHRECT
+        cr = -1;
+#if !RETRO_USE_ORIGINAL_CODE
+        AddDebugHitbox(H_TYPE_FINGER, NULL, l, tp, r, b);
+#endif
+        for (int f = 0; f < touches; ++f) {
+            if (touchDown[f] && touchX[f] > l && touchX[f] < r && touchY[f] > tp && touchY[f] < b)
+                cr = f;
+        }
+    };
+    auto pause = [&]() {
+        if (G[13] == 0) {
+            PlaySfx(23, 0);
+            Engine.gameMode = 5;
+        }
+    };
+    if (G[5] == 0) {
+        if (G[7] == 1) {
+            if (E().controlMode == 0) {
+                touch(0, 96, SCREEN_CENTERX, SCREEN_YSIZE);
+                if (cr > -1) {
+                    ap[0] = cr;
+                    t[0]  = touchX[ap[0]];
+                    t[0] -= saveRAM[39];
+                    if (t[0] > 0) {
+                        if (ic())
+                            keyDown.right = 1;
+                    }
+                    else {
+                        if (ic())
+                            keyDown.left = 1;
+                    }
+                }
+                touch(SCREEN_CENTERX, 96, SCREEN_XSIZE, 240);
+                if (cr > -1) {
+                    if (ic())
+                        keyDown.A = 1;
+                }
+                if (G[102] == 0) { // Or KEYPRESSBUTTONA KEYDOWNBUTTONA
+                    int a = keyPress.A && ic();
+                    a |= keyDown.A && ic();
+                    if (ic())
+                        keyPress.A = a;
+                }
+                G[102] = keyDown.A && ic();
+                if (debugMode == 1) {
+                    touch(0, 0, 112, 56);
+                    if (cr > -1) {
+                        if (ic())
+                            keyDown.B = 1;
+                    }
+                    if (G[103] == 0) {
+                        int b = keyPress.B && ic();
+                        b |= keyDown.B && ic();
+                        if (ic())
+                            keyPress.B = b;
+                    }
+                    G[103] = keyDown.B && ic();
+                }
+                touch(240, 0, SCREEN_XSIZE, 40);
+                if (cr > -1)
+                    pause();
+                if ((keyPress.start && ic()) == 1)
+                    pause();
+                if ((keyDown.B && ic()) == 2) // the mobile back key's pause, its 1 patched to 2 (patch_back_pause)
+                    pause();
+            }
+        }
+        ProcessObjectControl(&E());
+        if (G[13] == 1) {
+            E().values[24] = L(7457);
+            int *op = scriptEng.operands; // CallNativeFunction2 GLOBAL[137] 2 0
+            op[0] = G[137], op[1] = 2, op[2] = 0;
+            if (op[0] >= 0 && op[0] < NATIIVEFUNCTION_COUNT) {
+                if (StrLength(scriptText)) {
+                    void (*func)(int *, char *) = (void (*)(int *, char *))nativeFunction[op[0]];
+                    if (func)
+                        func(&op[2], scriptText);
+                }
+                else {
+                    void (*func)(int *, int *) = (void (*)(int *, int *))nativeFunction[op[0]];
+                    if (func)
+                        func(&op[1], &op[2]);
+                }
+            }
+            G[137] = op[0];
+        }
+    }
+    else {
+        touch(0, 0, SCREEN_XSIZE, SCREEN_YSIZE);
+        if ((keyPress.start && ic()) == 1)
+            cr = 0;
+        if (cr > -1) {
+            if (L(7448) > 1)
+                PS1ScriptWrite(7448, 1);
+        }
+        if ((keyPress.start && ic()) == 1)
+            PS1ScriptWrite(7448, 1);
+        PS1ScriptWrite(7447, L(7447) - 1);
+        if (L(7447) < 1) {
+            if (L(7445) < L(7446)) {
+                if (L(7445) >= 0 && L(7445) < scriptCode[L(7444)]) // GetTableValue TEMP0 LOCAL7445 LOCAL7444
+                    t[0] = scriptCode[L(7444) + L(7445) + 1];
+                E().up        = (t[0] & (1 << 0)) >> 0;
+                E().down      = (t[0] & (1 << 1)) >> 1;
+                E().left      = (t[0] & (1 << 2)) >> 2;
+                E().right     = (t[0] & (1 << 3)) >> 3;
+                E().jumpPress = (t[0] & (1 << 4)) >> 4;
+                E().jumpHold  = (t[0] & (1 << 5)) >> 5;
+                PS1ScriptWrite(7445, L(7445) + 1);
+                if (L(7445) >= 0 && L(7445) < scriptCode[L(7444)]) // GetTableValue LOCAL7447 LOCAL7445 LOCAL7444
+                    PS1ScriptWrite(7447, scriptCode[L(7444) + L(7445) + 1]);
+                PS1ScriptWrite(7445, L(7445) + 1);
+            }
+        }
+        else {
+            if (E().jumpPress == 1)
+                E().jumpPress = 0;
+        }
+        if (L(7448) > 0) {
+            PS1ScriptWrite(7448, L(7448) - 1);
+            if (L(7448) < 1) {
+                ap[0]                    = L(7456);
+                PS1_OBJ(ap[0]).type      = 0;
+                PS1_OBJ(ap[0]).state     = 8;
+                PS1_OBJ(ap[0]).priority  = 1;
+                PS1_OBJ(ap[0]).drawOrder = 6;
+            }
+        }
+    }
+    if (E().values[7] > 0) {
+        E().values[7]--;
+        t[0] = (E().values[7] & (1 << 2)) >> 2;
+        if (t[0] == 1)
+            E().visible = 0;
+        else
+            E().visible = 1;
+    }
+}
+// ShL LOCAL 1 / Or LOCAL bit / And LOCAL 65535 (each written back by the VM): a slot that already holds a big value is
+// updated in place, so only the last of the three writes shows (nothing reads in between) and only it is made;
+// otherwise the three writes as the VM makes them (one may insert the slot into the table), each re-read
+static int PS1LocalShiftIn(int pos, int bit)
+{
+    if (scriptCode.slot[pos] == PS1_SCRIPT_BIG) {
+        const int v = ((scriptCode[pos] << 1) | bit) & 65535;
+        PS1ScriptWrite(pos, v);
+        return v;
+    }
+    PS1ScriptWrite(pos, scriptCode[pos] << 1);
+    PS1ScriptWrite(pos, scriptCode[pos] | bit);
+    PS1ScriptWrite(pos, scriptCode[pos] & 65535);
+    return scriptCode[pos];
+}
+static void PS1SpecialCtrlP2()
+{
+    int *t     = scriptEng.temp;
+    Entity &p1 = PS1_OBJ(2);
+    int r[6];
+    r[0] = PS1LocalShiftIn(7438, p1.up);
+    r[1] = PS1LocalShiftIn(7439, p1.down);
+    r[2] = PS1LocalShiftIn(7440, p1.left);
+    r[3] = PS1LocalShiftIn(7441, p1.right);
+    r[4] = PS1LocalShiftIn(7442, p1.jumpPress);
+    r[5] = PS1LocalShiftIn(7443, p1.jumpHold);
+    Entity &me = objectEntityList[objectEntityPos];
+    t[0]       = r[0];
+    t[0] >>= 15;
+    me.up = t[0];
+    t[0]  = r[1];
+    t[0] >>= 15;
+    me.down = t[0];
+    t[0]    = r[2];
+    t[0] >>= 15;
+    me.left = t[0];
+    t[0]    = r[3];
+    t[0] >>= 15;
+    me.right = t[0];
+    t[0]     = r[4];
+    t[0] >>= 15;
+    me.jumpPress = t[0];
+    t[0]         = r[5];
+    t[0] >>= 15;
+    me.jumpHold = t[0];
+    if (me.values[7] > 0) {
+        me.values[7]--;
+        t[0] = (me.values[7] & (1 << 2)) >> 2;
+        if (t[0] == 1)
+            me.visible = 0;
+        else
+            me.visible = 1;
+    }
+}
+// The special stage's Lose Ring (the rings a hit scatters: dozens at once, 90 frames each, ~20 VM instructions a frame
+// apiece: up to ~60 hblanks a frame after a hit, docs/43): its update sub (fall, grow to 512, spin, gone after 90 frames)
+// and draw sub (a scaled sprite at the screen centre's offset), natively: one statement per script instruction, in
+// order (t = temps). Patched in only when the subs (and the update's jump-table entries) match SPLOSERING_SIG /
+// SPLOSERING_DRAW_SIG.
+static void PS1SpLoseRingUpdate()
+{
+    Entity &me = objectEntityList[objectEntityPos];
+    me.yvel += me.values[1];
+    me.xpos += me.xvel;
+    me.ypos += me.yvel;
+    if (me.scale < 512)
+        me.scale += 16;
+    me.animationTimer += me.animationSpeed;
+    if (me.animationTimer > 255) {
+        me.animationTimer -= 256;
+        me.frame++;
+        if (me.frame == 8)
+            me.frame = 0;
+    }
+    if (me.values[0] < 90)
+        me.values[0]++;
+    else
+        me.type = 0;
+}
+static void PS1SpLoseRingDraw()
+{
+    int *t                         = scriptEng.temp;
+    Entity &me                     = objectEntityList[objectEntityPos];
+    const ObjectScript *scriptInfo = &objectScriptList[me.type];
+    t[0]                           = me.xpos;
+    t[0] >>= 16;
+    t[0] += SCREEN_CENTERX;
+    t[1] = me.ypos;
+    t[1] >>= 16;
+    const SpriteFrame *f = &scriptFrames[scriptInfo->frameListOffset + me.frame]; // DrawSpriteScreenFX OBJECTFRAME FX_SCALE
+    DrawSpriteScaled(me.direction, t[0], t[1], -f->pivotX, -f->pivotY, me.scale, me.scale, f->width, f->height, f->sprX, f->sprY,
+                     scriptInfo->spriteSheetID);
+}
+#endif
+__attribute__((optimize("Os"))) static void PS1TextMsgDraw()
+{
+    int *t    = scriptEng.temp;
+    Entity &e = objectEntityList[objectEntityPos];
+    if (e.propertyValue < 10)
+        g_ps1TextMsgCover = g_ps1TextMsgCover | (1u << (10 + e.propertyValue));
+    switch (e.propertyValue) {
+        case 0:
+            e.ypos      = 116;
+            e.values[1] = 0;
+            PS1TextMsgText(e);
+            break;
+        case 1:
+            e.values[1] = 1;
+            e.ypos      = 116;
+            PS1TextMsgText(e);
+            e.ypos += 22;
+            e.values[1] = 2;
+            PS1TextMsgText(e);
+            break;
+        case 2:
+            e.ypos = 116;
+            if (e.values[4] > 99) {
+                e.values[1] = 5;
+                PS1TextMsgText(e);
+            }
+            else {
+                if (e.values[4] > 9) {
+                    e.values[1] = 4;
+                    PS1TextMsgText(e);
+                }
+                else {
+                    e.values[1] = 3;
+                    PS1TextMsgText(e);
+                }
+            }
+            break;
+        case 3:
+            if (e.visible == 1) {
+                e.ypos = 64;
+                if (e.values[4] > 99) {
+                    e.values[1] = 9;
+                    PS1TextMsgText(e);
+                }
+                else {
+                    if (e.values[4] > 9) {
+                        e.values[1] = 8;
+                        PS1TextMsgText(e);
+                    }
+                    else {
+                        if (e.values[4] == 1) {
+                            e.values[1] = 6;
+                            PS1TextMsgText(e);
+                        }
+                        else {
+                            e.values[1] = 7;
+                            PS1TextMsgText(e);
+                        }
+                    }
+                }
+            }
+            break;
+        case 4:
+            e.ypos      = 116;
+            e.values[1] = 10;
+            PS1TextMsgText(e);
+            break;
+        case 5:
+            e.ypos      = 116;
+            e.values[1] = 11;
+            PS1TextMsgText(e);
+            break;
+        case 6:
+            e.ypos      = 116;
+            e.values[1] = 12;
+            PS1TextMsgText(e);
+            break;
+        case 7:
+            e.ypos      = 116;
+            e.values[1] = 13;
+            PS1TextMsgText(e);
+            break;
+        case 8:
+            e.ypos      = 68;
+            e.values[1] = 14;
+            PS1TextMsgText(e);
+            break;
+        case 9: { // DrawSpriteScreenFX OBJECTFRAME FX_ROTOZOOM TEMP0 TEMP1
+            t[0] = e.xpos;
+            t[0] >>= 16;
+            t[0] += SCREEN_CENTERX;
+            t[1] = e.ypos;
+            t[1] >>= 16;
+            ObjectScript *o = &objectScriptList[e.type];
+            SpriteFrame *f  = &scriptFrames[o->frameListOffset + e.frame];
+            DrawSpriteRotozoom(e.direction, t[0], t[1], -f->pivotX, -f->pivotY, f->sprX, f->sprY, f->width, f->height, e.rotation, e.scale,
+                               o->spriteSheetID);
+            break;
         }
     }
 }
@@ -10997,6 +11861,72 @@ static inline uint8_t *PS1DirectAt(const short *c)
 }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2's subs that are one native opcode and End (tools/scripts/patch_bytecode.py: the rings, bombs, Halfpipe, Special
+// Setup, the player, the zones' objects; docs/43, as Sonic 1's PS1S1FastSub): the native runs without the VM's per-sub
+// work (the instruction loop, dispatch, then End), leaving what the VM would (scriptText cleared by each instruction).
+// Only natives that take no operands and use none of ProcessScript's locals; anything else takes the VM.
+static bool PS1S2FastSub(int p)
+{
+    if (PS1_RAW(p + 1) != FUNC_END)
+        return false;
+    switch (PS1_RAW(p)) {
+        case FUNC_PS1RING: scriptText[0] = '\0'; PS1RingUpdate(); break;
+        case FUNC_PS1LOSERING: scriptText[0] = '\0'; PS1LoseRingUpdate(); break;
+        case FUNC_PS1BUTTONBRIDGE: scriptText[0] = '\0'; PS1ButtonBridgeUpdate(); break;
+        case FUNC_PS1PLANESWITCHV: scriptText[0] = '\0'; PS1PlaneSwitchUpdate(true); break;
+        case FUNC_PS1PLANESWITCHH: scriptText[0] = '\0'; PS1PlaneSwitchUpdate(false); break;
+        case FUNC_PS1ROTATEPLATFORM: scriptText[0] = '\0'; PS1RotatePlatformUpdate(); break;
+        case FUNC_PS1ROTATEPLATFORMDRAW: scriptText[0] = '\0'; PS1RotatePlatformDraw(); break;
+        case FUNC_PS1HPZBRIDGE: scriptText[0] = '\0'; PS1HPZBridgeUpdate(); break;
+        case FUNC_PS1HPZBRIDGEDRAW: scriptText[0] = '\0'; PS1HPZBridgeDraw(); break;
+        case FUNC_PS1STAGESETUP: scriptText[0] = '\0'; PS1StageSetupUpdate(); break;
+        case FUNC_PS1HUDDRAW: scriptText[0] = '\0'; PS1HUDDraw(); break;
+        case FUNC_PS1TURRETPLATFORM: scriptText[0] = '\0'; PS1TurretPlatformUpdate(); break;
+        case FUNC_PS1BELTPLATFORM: scriptText[0] = '\0'; PS1BeltPlatformUpdate(); break;
+        case FUNC_PS1HFLIPPER: scriptText[0] = '\0'; PS1HFlipperUpdate(); break;
+        case FUNC_PS1EARTHQUAKE: scriptText[0] = '\0'; PS1EarthquakeUpdate(); break;
+        case FUNC_PS1SPIKES: scriptText[0] = '\0'; PS1SpikesUpdate(); break;
+        case FUNC_PS1CLEDGE: scriptText[0] = '\0'; PS1CLedgeUpdate(); break;
+        case FUNC_PS1STEAMPISTON: scriptText[0] = '\0'; PS1SteamPistonUpdate(); break;
+        case FUNC_PS1MPZSETUP: scriptText[0] = '\0'; PS1MPZSetupUpdate(); break;
+        case FUNC_PS1MONITOR: scriptText[0] = '\0'; PS1MonitorUpdate(); break;
+        case FUNC_PS1INVISIBLEBLOCK: scriptText[0] = '\0'; PS1InvisibleBlockUpdate(); break;
+        case FUNC_PS1SPECIALRING: scriptText[0] = '\0'; PS1SpecialRingUpdate(); break;
+        case FUNC_PS1SPECIALBOMB: scriptText[0] = '\0'; PS1SpecialBombUpdate(); break;
+        case FUNC_PS1TEXTMSGUPDATE: scriptText[0] = '\0'; PS1TextMsgUpdate(); break;
+        case FUNC_PS1TEXTMSGDRAW: scriptText[0] = '\0'; PS1TextMsgDraw(); break;
+        case FUNC_PS1SPECIALHUDDRAW: scriptText[0] = '\0'; PS1SpecialHUDDraw(); break;
+        case FUNC_PS1SPLOSERING: scriptText[0] = '\0'; PS1SpLoseRingUpdate(); break;
+        case FUNC_PS1SPLOSERINGDRAW: scriptText[0] = '\0'; PS1SpLoseRingDraw(); break;
+        case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
+        case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
+        case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
+        case FUNC_PS1RINGSPARKLE: scriptText[0] = '\0'; PS1RingSparkleUpdate(); break;
+        case FUNC_PS1HPZSETUP: scriptText[0] = '\0'; PS1HPZSetupUpdate(); break;
+        case FUNC_PS1SPECIALPLAYER: scriptText[0] = '\0'; PS1SpecialPlayerUpdate(); break;
+        case FUNC_PS1ARZWATER: scriptText[0] = '\0'; PS1WaterUpdate(0); break;
+        case FUNC_PS1CPZWATER: scriptText[0] = '\0'; PS1WaterUpdate(1); break;
+        case FUNC_PS1HPZWATER: scriptText[0] = '\0'; PS1WaterUpdate(2); break;
+        default: return false;
+    }
+    scriptText[0] = '\0'; // End
+    return true;
+}
+// The same before ProcessScript is entered (ProcessObjects, DrawObjectList): the stacks reset as ProcessScript resets
+// them for a top-level run; false = run ProcessScript as before
+static_assert(FUNC_END == 0, "Object.cpp / Drawing.cpp test `op End` before calling PS1S2TopSub");
+bool PS1S2TopSub(int p)
+{
+    if (s_ps1CallNested)
+        return false;
+    jumpTableStackPos = 0;
+    functionStackPos  = 0;
+    foreachStackPos   = 0;
+    return PS1S2FastSub(p);
+}
+#endif
+
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 {
     bool running      = true;
@@ -11022,6 +11952,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
 #endif
 #if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME == 1 && !defined(RETRO_PS1_HOST_TOOL)
     if (!ps1FuncBase && PS1S1FastSub(scriptCodePtr))
+        return;
+#endif
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+    if (!ps1FuncBase && PS1S2FastSub(scriptCodePtr))
         return;
 #endif
 
@@ -12855,13 +13789,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 uint32_t t1 = PS1Hblanks();
 #if PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL) // the host tool (tools/rsdkmanifest) has no PS1 Scene3D
                 uint32_t t2 = t1;
-                if (g_ps1Draw3DOT && !g_ps1Sort3DExact) // the sort folded into an ordering table (Scene3D.cpp)
-                    PS1Draw3DSceneOT(scriptInfo->spriteSheetID);
-                else {
-                    Sort3DDrawList();
-                    t2 = PS1Hblanks();
-                    Draw3DScene(scriptInfo->spriteSheetID);
-                }
+                PS1Draw3DSceneOT(scriptInfo->spriteSheetID); // the sort folded into an ordering table (Scene3D.cpp)
 #else
                 Sort3DDrawList();
                 uint32_t t2 = PS1Hblanks();
@@ -13315,6 +14243,34 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPECIALBOMB:
                 opcodeSize = 0;
                 PS1SpecialBombUpdate();
+                break;
+            case FUNC_PS1TEXTMSGUPDATE:
+                opcodeSize = 0;
+                PS1TextMsgUpdate();
+                break;
+            case FUNC_PS1TEXTMSGDRAW:
+                opcodeSize = 0;
+                PS1TextMsgDraw();
+                break;
+            case FUNC_PS1SPECIALHUDDRAW:
+                opcodeSize = 0;
+                PS1SpecialHUDDraw();
+                break;
+            case FUNC_PS1SPECIALCTRLP1: // a function body
+                opcodeSize = 0;
+                PS1SpecialCtrlP1();
+                break;
+            case FUNC_PS1SPECIALCTRLP2: // a function body
+                opcodeSize = 0;
+                PS1SpecialCtrlP2();
+                break;
+            case FUNC_PS1SPLOSERING: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpLoseRingUpdate();
+                break;
+            case FUNC_PS1SPLOSERINGDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1SpLoseRingDraw();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;

@@ -3,6 +3,24 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Much faster special stages (October 2026)
+
+- **The special stages now run at or very near full speed (60 frames a second).** In the port's test runs with Sonic &
+  Tails (the hardest case: two players), special stages 1, 3, 7 and 8 keep a full 60 frames a second, and stages 2, 4,
+  5 and 6 drop at most 3 frames out of every 600 (10 seconds): the drops come during jumps, when the camera gets close
+  to the half-pipe. With Sonic alone, stage 1 keeps 60 frames a second too. With the previous update's executable the
+  special stages still ran visibly below full speed, more so with Sonic & Tails.
+- How: the half-pipe's drawing and 3D maths do less work per frame (more of it in hand-written assembly; faces and
+  sprites that can't be seen are dropped earlier), and more of the special stage's scripts run as native code instead
+  of the script interpreter: the HUD, the players' controls (Tails's computer-controlled following among them) and the
+  rings that scatter when you hit a bomb (dozens at once, which used to slow the game down right after a hit).
+- The picture and the gameplay are the same: every change was checked frame by frame against the previous version
+  (pictures, positions and the drawing commands), for every special stage.
+- The title screen shows the new build, `V 250CB682` (the RSDKv4-ps1 port's commit `250cb68`).
+- Checked with the port's automated tests in PCSX-Redux and DuckStation, the special stage's and the zones' memory
+  checks included. Not yet tested on a console.
+- The image's SHA-256 changes (the new value is in the README's Output section).
+
 ## Build stamp on the title screen (October 2026)
 
 - **The title screen shows which build you are playing:** a small grey line in its bottom-left corner, e.g.

@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`8e13c70541ed359ed1a21747f12777ff4f6ae70b619f14a6545ec866bb3bca83`. Other versions of FFmpeg or psxavenc may encode the
+`c18a4c338158e74e7f728d846f6a7c8f27d90b7b79a76fcd6a750f6298da7a0a`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,8 +53,8 @@ sectors, the file index, and every file against its source.
 
 ## What's new
 
-Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): the title screen shows the build
-(`V 2E8A04CD`, bottom-left), so you can tell which version you are playing.
+Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): much faster special stages, most of
+them at a full 60 frames a second with Sonic & Tails (build `V 250CB682`).
 
 ## What the PS1 version can do
 

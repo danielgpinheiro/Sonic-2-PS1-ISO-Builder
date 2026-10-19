@@ -32,6 +32,14 @@ extern int GFX_FBUFFERMINUSONE;
 
 extern uint gfxPalette16to32[0x10000];
 
+#if RETRO_PLATFORM == RETRO_PS1 && PS1_GAME != 1 && !defined(RETRO_PS1_HOST_TOOL)
+// Sonic 2: bumped by every palette write (docs/43: ps1/render.cpp's per-frame palette compare runs only after one)
+extern uint g_ps1PalVersion;
+#define PS1_PAL_WRITTEN() (++g_ps1PalVersion)
+#else
+#define PS1_PAL_WRITTEN() ((void)0)
+#endif
+
 extern int fadeMode;
 extern byte fadeA;
 extern byte fadeR;
@@ -70,6 +78,7 @@ inline void SetActivePalette(byte newActivePal, int startLine, int endLine)
 
 inline void SetPaletteEntry(byte paletteIndex, byte index, byte r, byte g, byte b)
 {
+    PS1_PAL_WRITTEN();
     if (paletteIndex != 0xFF) {
         fullPalette[paletteIndex][index]     = PACK_RGB888(r, g, b);
         fullPalette32[paletteIndex][index].r = r;
@@ -86,6 +95,7 @@ inline void SetPaletteEntry(byte paletteIndex, byte index, byte r, byte g, byte 
 
 inline void SetPaletteEntryPacked(byte paletteIndex, byte index, uint color)
 {
+    PS1_PAL_WRITTEN();
     fullPalette[paletteIndex][index] = PACK_RGB888((byte)(color >> 16), (byte)(color >> 8), (byte)(color >> 0));
 
     fullPalette32[paletteIndex][index].r = (byte)(color >> 16);
@@ -102,6 +112,7 @@ inline uint GetPaletteEntryPacked(byte paletteIndex, byte index)
 inline void CopyPalette(byte sourcePalette, byte srcPaletteStart, byte destinationPalette, byte destPaletteStart, byte count)
 {
     if (sourcePalette < PALETTE_COUNT && destinationPalette < PALETTE_COUNT) {
+        PS1_PAL_WRITTEN();
         for (int i = 0; i < count; ++i) {
             fullPalette[destinationPalette][destPaletteStart + i]   = fullPalette[sourcePalette][srcPaletteStart + i];
             fullPalette32[destinationPalette][destPaletteStart + i] = fullPalette32[sourcePalette][srcPaletteStart + i];
@@ -111,6 +122,7 @@ inline void CopyPalette(byte sourcePalette, byte srcPaletteStart, byte destinati
 
 inline void RotatePalette(int palID, byte startIndex, byte endIndex, bool right)
 {
+    PS1_PAL_WRITTEN();
     if (right) {
         ushort startClr         = fullPalette[palID][endIndex];
         PaletteEntry startClr32 = fullPalette32[palID][endIndex];
