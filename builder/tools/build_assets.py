@@ -7,7 +7,8 @@ Bytecode/), into OUT/build/iso (the disc tree) and OUT/build/manifest (the sprit
   1 data      extract (tools/extract_rsdk.py with tools/rsdkv4_filelist.txt), copy Data/ + Bytecode/ without the PC
               source assets (.gif .wav .ogg), the native menus' art and meshes (Data/Game/Menu, Data/Game/Models) and
               Egg Gauntlet (ZoneM, user decision 2026-09-25)
-  1 scripts   the bytecode's PS1 edits (scripts/patch_bytecode.py) and the stages that get the Scene3D arrays
+  1 scripts   the bytecode's PS1 edits (scripts/patch_bytecode.py), the stages that get the Scene3D arrays and the
+              layouts' PS1 edits (scripts/patch_layouts.py: Death Egg's door + Eggman always processed, V4-105)
   2 manifest  the host build of the engine (rsdkmanifest: every stage's startups, per player variant) -> sprite
               manifests, the packed chunk tiles / collision masks and the script images (Scripts.ps1)
   3 atlas     one sprite atlas per stage per variant ('' Sonic, _t Tails, _k Knuckles, _st Sonic & Tails)
@@ -114,6 +115,7 @@ def main():
     bc = os.path.join(iso, 'Bytecode')
     run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_bytecode.py'), bc, '--game', a.game], env=env)
     run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'scene3d_stages.py'), bc, data], env=env)
+    run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_layouts.py'), data, '--game', a.game], env=env)
 
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + tools['CXX'], 'GAME=' + a.game],
         env=env)

@@ -3,6 +3,23 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Tester fixes: Death Egg gate, coloured emeralds, sprite edges (October 2026)
+
+- **Death Egg Zone: a spin dash after beating Mecha Sonic no longer takes you past the gate early.** On the PS1's
+  narrower screen the camera, frozen for a moment by the spin dash, left Eggman outside the area where objects are
+  updated, so he never held the door shut and you rolled past before his scene. Eggman is now always updated (a small
+  change to the level's layout file made while building the disc); the door stays shut until he runs, as when you walk
+  up to it.
+- **The save select shows collected Chaos Emeralds in their colours** (as on mobile), so it is easy to see which ones
+  are missing; missing ones stay grey.
+- **Mirrored player sprites no longer show a stretched column** when the sprite happened to sit at the left edge of a
+  texture page in video memory (one column was drawn twice, so part of the sprite shifted by a pixel between animation
+  frames). The disc builder now keeps the player's sprites off that edge where there is room; a few still sit there in
+  crowded stages.
+- The title screen shows the new build, `V 5EA4BF02` (the RSDKv4-ps1 port's commit `5ea4bf0`).
+- Checked with the port's automated tests in PCSX-Redux and DuckStation (new tests for each fix). The image's SHA-256
+  changes (the new value is in the README's Output section).
+
 ## Flip-bit sprites on newer consoles (October 2026)
 
 - **On consoles with the newer GPU (every PSone, most later PlayStations), mirrored sprites are now drawn with the

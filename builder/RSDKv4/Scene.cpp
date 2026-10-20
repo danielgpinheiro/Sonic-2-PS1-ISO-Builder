@@ -228,7 +228,19 @@ void ProcessStage(void)
             // the Scene3D block for the stages that use it, once the bracket has freed the chain arenas
             PS1Scene3DPrepare(stageList[activeStageList][stageListPosition].folder);
             PS1FsSetLoadFolder(stageList[activeStageList][stageListPosition].folder); // its local copies (ps1/cdrom_fs)
-            LoadStageFiles();
+#if PS1_GAME == 1
+            // Sonic 1's staff credits load the zone demos and the credits between them with Credits.ogg still playing:
+            // past the first screen (credits.screen > 0) the Title Card and Credits Control skip PlayMusic, the PC's
+            // stream carries on through the loads. One CD action at a time: the track pauses for the load and resumes
+            // at its row (V4-107; before, the load's file read stopped it for good after "Staff Roll").
+            if (GetGlobalVariableByName("credits.screen") > 0) {
+                PS1MusicHold();
+                LoadStageFiles();
+                PS1MusicRestore();
+            }
+            else
+#endif
+                LoadStageFiles();
             PS1FsSetLoadFolder(nullptr);
             PS1LoadingEnd();
 #else

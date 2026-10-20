@@ -83,6 +83,8 @@ void PS1SfxLoadStageBank() {}
 void PS1SfxLoadMenuBank() {}
 void PS1MusicStop() {}
 void PS1MusicPause(bool pause) {}
+void PS1MusicHold() {}
+void PS1MusicRestore() {}
 int currentStreamIndex = 0; // FreeMusInfo (Audio.hpp, PS1)
 StreamInfo streamInfo[STREAMFILE_COUNT];
 void SetupTextMenu(TextMenu *menu, int rowCount) {}
