@@ -76,6 +76,22 @@ static inline PS1QuadUV PS1RectUV(int pu, int pv, int pw, int ph, int w, int h, 
     return uv;
 }
 
+// Texcoord of a 1:1 mirrored piece (u, v, w x h) drawn as a flip rectangle (GP0(E1h) bit 12 X / bit 13 Y flip, new GPUs
+// only: nocash psx-spx "GPU Render Rectangle Commands"): the rectangle decrements its texcoords on a flipped axis, so it
+// starts at the piece's last texel (u + w - 1 / v + h - 1). Returns false where the quad stays:
+// - X flip ignores Texcoord.X's LSB and starts at an odd X: u + w - 1 must be odd (u + w even);
+// - an unflipped X axis wants an even Texcoord.X (odd ones glitch every 4th / 8th pixel on hardware), so u even there;
+// - the quad it replaces (PS1RectUV, 1:1) must be exact: every UV edge within a byte (0 .. 255), else the quad clamps and
+//   the two would differ.
+#define PS1_FLIP_RECT_TEX 1 // the host test (../tests/host/cd_sprite_quads.cpp) checks it when present
+static inline bool PS1FlipRectTex(int u, int v, int w, int h, bool flipX, bool flipY, int *tu, int *tv)
+{
+    int u0 = u - flipX, u1 = u + w - flipX, v0 = v - flipY, v1 = v + h - flipY; // the quad's UV edges (PS1RectUV, 1:1)
+    *tu = flipX ? u1 : u;
+    *tv = flipY ? v1 : v;
+    return !((u0 | u1 | v0 | v1) & ~0xFF) && (*tu & 1) == flipX; // edges in a byte; X flip odd, else even
+}
+
 // Texel edge at screen offset pos of a piece edge spanning len pixels / texels texels from base (mirrored: from the far
 // edge), for pieces cut to the screen (PS1ChainPieceRectClipped).
 static inline int PS1ClipEdge(int base, int texels, int pos, int len, bool flip)

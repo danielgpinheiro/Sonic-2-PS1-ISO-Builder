@@ -3,6 +3,23 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Flip-bit sprites on newer consoles (October 2026)
+
+- **On consoles with the newer GPU (every PSone, most later PlayStations), mirrored sprites are now drawn with the
+  GPU's own flip feature**, as mirrored level tiles already were, instead of as textured four-corner shapes: less GPU
+  work for every sprite facing left. It applies to sprites drawn at their own size and not rotated (Sonic 2's player
+  standing or running on flat ground included); rotated and scaled sprites are drawn as before.
+- The start-up check is stricter: the game first asks the GPU its version (nocash's GPU detection; the earliest
+  consoles' GPU lacks the flip feature and never uses it), then keeps the existing test drawing read back from video
+  memory, so an emulator that reports a newer GPU but doesn't draw the flips (some versions of PCSX ReARMed) still
+  gets the old drawing. The previous check could, in a rare case, misread an old GPU's answer.
+- The picture is the same either way: checked frame by frame in the DuckStation preview build, which draws the flip
+  feature, against the old way of drawing. Not yet tested on a console.
+- The title screen shows the new build, `V 857E6CE9` (the RSDKv4-ps1 port's commit `857e6ce`).
+- Checked with the port's automated tests in PCSX-Redux and DuckStation (the special stages keep their speed; the
+  zones' and special stage's memory checks included).
+- The image's SHA-256 changes (the new value is in the README's Output section).
+
 ## Much faster special stages (October 2026)
 
 - **The special stages now run at or very near full speed (60 frames a second).** In the port's test runs with Sonic &

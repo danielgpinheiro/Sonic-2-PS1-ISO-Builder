@@ -23,4 +23,5 @@ void PS1TestAfterInit();         // after Engine.Init: seed, player 2 flag
 void PS1TestPreFrame();          // frame(), before RunFrame: input track, pokes
 void PS1TestPostFrame();         // frame(), after PS1PerfTick: telemetry, checkpoints, end of run
 void PS1TestPhase(uint8_t p);    // hang-diagnosis marker (what the main loop is doing)
+void PS1TestNote(const char *tag, uint32_t a, uint32_t b, uint32_t c); // one TTY line "tag a b c" (hex)
 #endif
