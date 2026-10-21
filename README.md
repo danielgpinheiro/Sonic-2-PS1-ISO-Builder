@@ -44,7 +44,7 @@ everything is converted **once, on your computer**, into formats the PS1 hardwar
 
 Built from the known `Data.rsdk` **without** a license file and with the tool versions listed under
 [Requirements](#requirements), the image is `Sonic2-PS1.bin` SHA-256
-`5ed4765da8d2a66a08a85e41bf8a8e6d244c7f206a33df7d3fedd17eb4fdd461`. Other versions of FFmpeg or psxavenc may encode the
+`8146b41a2054032874c440ec64e535a661667dd89d8ad2971285bcc8118c3db6`. Other versions of FFmpeg or psxavenc may encode the
 audio slightly differently, which changes the hash but not the game. With a license file the license sectors differ, so
 the hash does too.
 
@@ -53,9 +53,8 @@ sectors, the file index, and every file against its source.
 
 ## What's new
 
-Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): mirrored sprites use the GPU's flip
-feature on consoles that have it, as mirrored tiles already did (checked at start-up; the earliest consoles draw as
-before), build `V 857E6CE9`.
+Every update is listed in [CHANGELOG.md](CHANGELOG.md). Latest (October 2026): Aquatic Ruin at full speed with Sonic
+and with Sonic & Tails, the zone title card's text no longer under the red stripe, build `V 379BB44F`.
 
 ## What the PS1 version can do
 

@@ -119,7 +119,8 @@ static void PS1BuildTypeGroupsFrom(const short *cand, int n)
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-char typeNames[OBJECT_COUNT][0x20];
+char typeNames[OBJECT_COUNT][PS1_TYPENAME_LEN];
+volatile unsigned g_ps1TypeNameClamped = 0;
 #else
 char typeNames[OBJECT_COUNT][0x40];
 #endif
@@ -663,6 +664,12 @@ void SetObjectTypeName(const char *objectName, int objectID)
     int objPos  = 0;
     int typePos = 0;
     while (objectName[objPos]) {
+#if RETRO_PLATFORM == RETRO_PS1
+        if (objectName[objPos] != ' ' && typePos == PS1_TYPENAME_LEN - 1) { // no room: cut, counted
+            g_ps1TypeNameClamped = g_ps1TypeNameClamped + 1;
+            break;
+        }
+#endif
         if (objectName[objPos] != ' ')
             typeNames[objectID][typePos++] = objectName[objPos];
         ++objPos;

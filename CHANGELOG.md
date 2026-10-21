@@ -3,6 +3,25 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Aquatic Ruin at full speed, the title card's text in the clear (October 2026)
+
+- **Aquatic Ruin runs at 60 frames a second**, as Sonic and as Sonic & Tails, also where leaves fly, a Grounder bursts
+  out of a wall in a shower of bricks and rings scatter. Its leaves, bushes, bricks, Grounders and springboards now run
+  as native code instead of through the game's script interpreter, as do the water's surface and the zone's palette
+  split; the water zones keep both of their palettes ready instead of converting them every frame, and sprites near the
+  water line are drawn faster. Across the game about 160 objects that only draw one sprite skip the interpreter too.
+  Everything behaves and looks exactly as before (checked frame by frame against the previous version in every zone).
+- **The zone title card:** "SONIC THE HEDGEHOG" was half hidden behind the red stripe (the PS1's screen is narrower than
+  the PC version's). The red stripe is now drawn a little narrower, so the text sits wholly on the yellow stripe as on
+  the PC; the card's timing is unchanged.
+- **Metropolis' giant gears stay at full speed** on every emulator: its spinning tubes (cylinders) run as native code
+  too, which gives that spot more room than before.
+- **The loading icon waits while a level load is copying graphics to video memory.** Two copies at the same time stop
+  the game; in the Sonic 1 port this froze the end credits in the PCSX-ReARMed emulator. Sonic 2 had the same weak spot.
+- The title screen shows the new build, `V 379BB44F` (the RSDKv4-ps1 port's commit `379bb44`).
+- Checked with the port's automated tests in PCSX-Redux and DuckStation. The image's SHA-256 changes (the new value is
+  in the README's Output section).
+
 ## Hidden Palace under water and Metropolis' giant gears at full speed (October 2026)
 
 - **Hidden Palace's flooded section runs at 60 frames a second**, as Sonic and as Sonic & Tails. Under water the

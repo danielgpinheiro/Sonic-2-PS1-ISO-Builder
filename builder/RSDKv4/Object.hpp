@@ -151,7 +151,11 @@ extern int processObjectFlag[ENTITY_COUNT];
 extern TypeGroupList objectTypeGroupList[TYPEGROUP_COUNT];
 
 #if RETRO_PLATFORM == RETRO_PS1
-extern char typeNames[OBJECT_COUNT][0x20]; // PS1: Sonic 2's longest object name has 18 chars
+// PS1: the longest object name without its spaces has 17 chars (Sonic 2's "Cockpit Background"; Sonic 1's 15): 19 + the
+// terminator (V4-111: 0x20 -> 0x14 gave the heap 3 KB); a longer one is cut there and counted (g_ps1TypeNameClamped).
+#define PS1_TYPENAME_LEN 0x14
+extern char typeNames[OBJECT_COUNT][PS1_TYPENAME_LEN];
+extern volatile unsigned g_ps1TypeNameClamped;
 #else
 extern char typeNames[OBJECT_COUNT][0x40];
 #endif
