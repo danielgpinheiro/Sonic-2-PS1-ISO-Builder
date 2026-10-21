@@ -8,6 +8,7 @@
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/video.hh"
 void PS1TileChanged(int chunkTile); // ps1/render.cpp
+extern volatile uint32_t g_ps1TileInputGen; // ps1/render.cpp: bumped by every change to what a tile layer pass reads
 
 // Guards for the PS1-sized arrays and the VM (for GDB; tools/*_test.sh read them).
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table / big values past the PS1-sized arrays
@@ -947,6 +948,19 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SpecialCtrlP2", 0),
     FunctionInfo("PS1SpLoseRing", 0),
     FunctionInfo("PS1SpLoseRingDraw", 0),
+    FunctionInfo("PS1JellygniteDraw", 0),
+    FunctionInfo("PS1LargeGear", 0),
+    FunctionInfo("PS1LargeGearDraw", 0),
+    FunctionInfo("PS1MTZBeltPlatform", 0),
+    FunctionInfo("PS1BeltActivation", 0),
+    FunctionInfo("PS1BeltActivationDraw", 0),
+    FunctionInfo("PS1VPlatform2", 0),
+    FunctionInfo("PS1Jellygnite", 0),
+    FunctionInfo("PS1MPlatform", 0),
+    FunctionInfo("PS1HPlatform2", 0),
+    FunctionInfo("PS1OneWayDoor", 0),
+    FunctionInfo("PS1WheelPlatform", 0),
+    FunctionInfo("PS1WheelPlatformDraw", 0),
 #endif
 #endif
 };
@@ -1526,6 +1540,19 @@ enum ScrFunc {
     FUNC_PS1SPECIALCTRLP2,
     FUNC_PS1SPLOSERING,
     FUNC_PS1SPLOSERINGDRAW,
+    FUNC_PS1JELLYGNITEDRAW,
+    FUNC_PS1LARGEGEAR,
+    FUNC_PS1LARGEGEARDRAW,
+    FUNC_PS1MTZBELTPLATFORM,
+    FUNC_PS1BELTACTIVATION,
+    FUNC_PS1BELTACTIVATIONDRAW,
+    FUNC_PS1VPLATFORM2,
+    FUNC_PS1JELLYGNITE,
+    FUNC_PS1MPLATFORM,
+    FUNC_PS1HPLATFORM2,
+    FUNC_PS1ONEWAYDOOR,
+    FUNC_PS1WHEELPLATFORM,
+    FUNC_PS1WHEELPLATFORMDRAW,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -4761,6 +4788,882 @@ static void PS1RotatePlatformDraw()
     v[2] &= -65536;
     PS1DrawSpriteXY(v[8], v[1], v[2]);
     PS1DrawSpriteXY(v[10], me.xpos, me.ypos); // DrawSprite v10
+}
+
+// Hidden Palace's Jellygnite draw (Zone08 stage object; 54 VM instructions that run twice a frame: the four tentacle
+// pieces, then, re-queued on draw list 4, the eight arm pieces and the body; ~20 hblanks a frame with the three under
+// water, V4-110), natively: one statement per script instruction, in order. Patched in only when the sub matches
+// JELLYGNITE_DRAW_SIG (tools/scripts/patch_bytecode.py).
+// Hidden Palace's Jellygnite update (Zone08 stage object; 58 VM instructions with Sonic, more with Sonic & Tails, ~10
+// hblanks each on the emulator; V4-110), natively: one statement per script instruction, in order. Stage functions 145
+// (its explosion) and GlobalCode 45 / 44 (release / hurt the player) run in the VM. Patched in only when the sub and its
+// jump-table entries match JELLYGNITE_SIG.
+static void PS1CallScriptFunction(int fn, int foreachDepth); // below
+static int PS1ObjectOutOfBounds(Entity *entPtr);            // below (VAR_OBJECTOUTOFBOUNDS)
+__attribute__((optimize("Os"))) static void PS1JellygniteUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    switch (me.state) {
+        case 0:
+            if (me.priority != 4)
+                me.priority = 1;
+            me.angle += 4;
+            me.angle &= 511;
+            v[3] = Sin512(me.angle);
+            v[3] <<= 1;
+            v[8]++;
+            v[8] &= 511;
+            me.xpos = Sin512(v[8]);
+            me.xpos <<= 11;
+            me.xpos += v[1];
+            t[1] = 2147483647;
+            t[2] = 0;
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6] = players.entityRefs[loop];
+                t[0]  = me.xpos;
+                t[0] -= PS1_OBJ(ap[6]).xpos;
+                t[0]  = abs(t[0]);
+                if (t[0] < t[1]) {
+                    t[1] = t[0];
+                    t[2] = ap[6];
+                }
+            }
+            ap[6] = t[2];
+            if (PS1_OBJ(ap[6]).ypos > globalVariables[48]) {
+                t[2] = PS1_OBJ(ap[6]).ypos;
+                t[2] -= 2097152;
+                if (me.ypos > t[2]) {
+                    me.yvel -= 2048;
+                    if (me.yvel < -49152)
+                        me.yvel = -49152;
+                }
+                else {
+                    me.yvel += 2048;
+                    if (me.yvel > 49152)
+                        me.yvel = 49152;
+                }
+            }
+            else {
+                me.yvel >>= 1;
+            }
+            me.ypos += me.yvel;
+            break;
+        case 1:
+            if (v[3] < 1536) {
+                v[3] += 128;
+            }
+            else {
+                me.state     = 2;
+                me.animation = 2;
+                PlaySfx(56, 0);
+            }
+            ap[6] = v[12];
+            {
+                Entity &p          = PS1_OBJ(ap[6]);
+                p.xpos             = me.xpos;
+                p.ypos             = me.ypos;
+                p.ypos += 786432;
+                p.frame            = 0;
+                p.animationTimer   = 0;
+            }
+            break;
+        case 2:
+            PS1CallScriptFunction(145, 0);
+            v[0]++;
+            if (v[0] == 60) {
+                if (v[12] != 2147483647) {
+                    ap[6] = v[12];
+                    if (PS1_OBJ(ap[6]).state != 29) {
+                        PS1_OBJ(ap[6]).state = 12;
+                        PS1CallScriptFunction(45, 0);
+                    }
+                    v[12] = 2147483647;
+                }
+                PS1ResetObjectEntity(self, 19, 0, me.xpos, me.ypos);
+                me.drawOrder = 4;
+                PlaySfx(8, 0);
+            }
+            break;
+    }
+    if (me.type == 69) {
+        if (PS1ObjectOutOfBounds(&me) == 1) {
+            t[0]    = me.xpos;
+            t[1]    = me.ypos;
+            me.xpos = v[1];
+            me.ypos = v[2];
+            if (PS1ObjectOutOfBounds(&me) == 1) {
+                me.animation = 0;
+                if (me.priority != 4)
+                    me.priority = 0;
+                me.state = 0;
+            }
+            else {
+                me.xpos = t[0];
+                me.ypos = t[1];
+            }
+        }
+        t[7] = v[12];
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6]     = players.entityRefs[loop];
+            Entity &p = PS1_OBJ(ap[6]);
+            if (ap[6] != t[7]) {
+                TouchCollision(&me, -14, -14, 14, 14, &p, p.values[40], p.values[38], p.values[41], p.values[39]);
+                if (cr == 1) {
+                    if (me.state == 0) {
+                        if (p.ypos < me.ypos) {
+                            PS1CallScriptFunction(44, 1);
+                        }
+                        else {
+                            me.state     = 1;
+                            me.animation = 1;
+                            v[12]        = ap[6];
+                            p.xvel       = 0;
+                            p.yvel       = 0;
+                            p.speed      = 0;
+                            p.values[1]  = 0;
+                            p.state      = 1;
+                            p.gravity    = 1;
+                            p.animation  = globalVariables[79];
+                        }
+                    }
+                    else {
+                        if (p.ypos < me.ypos)
+                            PS1CallScriptFunction(44, 1);
+                    }
+                }
+            }
+        }
+        if (me.type == 69) {
+            switch (me.animation) {
+                case 0:
+                    me.frame = 0;
+                    v[9]     = 3;
+                    v[10]    = 5;
+                    break;
+                case 1:
+                    me.frame = 1;
+                    v[9]     = 3;
+                    v[10]    = 5;
+                    break;
+                case 2:
+                    me.frame = me.animationTimer;
+                    me.frame >>= 5;
+                    v[9] = me.frame;
+                    v[9] += 3;
+                    v[10] = me.frame;
+                    v[10] += 5;
+                    me.frame++;
+                    me.animationTimer += v[0];
+                    me.animationTimer &= 63;
+                    break;
+            }
+        }
+        else {
+            if (t[7] != 2147483647) {
+                ap[6] = t[7];
+                if (PS1_OBJ(ap[6]).state == 1)
+                    PS1_OBJ(ap[6]).state = 12;
+            }
+        }
+    }
+    else {
+        if (v[12] != 2147483647) {
+            ap[6] = v[12];
+            if (PS1_OBJ(ap[6]).state == 1)
+                PS1_OBJ(ap[6]).state = 12;
+        }
+    }
+}
+__attribute__((optimize("Os"))) static void PS1JellygniteDraw()
+{
+    int *t     = scriptEng.temp;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    if (v[11] == 0) {
+        t[1] = me.angle;
+        t[1] &= 511;
+        t[0] = 0;
+        t[2] = me.ypos;
+        t[2] += 458752;
+        while (t[0] < 4) {
+            v[6] = Cos512(t[1]);
+            v[6] <<= 9;
+            v[6] += me.xpos;
+            v[7] = Sin512(t[1]);
+            v[7] <<= 8;
+            v[7] += t[2];
+            PS1DrawSpriteXY(v[10], v[6], v[7]);
+            t[0]++;
+            t[1] += 32;
+            t[1] &= 511;
+            t[2] += 393216;
+        }
+        drawListEntries[4].entityRefs[drawListEntries[4].listSize++] = self; // AddDrawListEntityRef 4 OBJECTENTITYPOS
+    }
+    else {
+        t[0] = 0;
+        t[4] = v[3];
+        v[4] = 0;
+        v[5] = 0;
+        while (t[0] < 4) {
+            t[5] = t[4];
+            t[5] >>= 7;
+            t[5] &= 511;
+            t[2] = Sin512(t[5]);
+            t[2] *= 786;
+            v[4] += t[2];
+            t[3] = Cos512(t[5]);
+            t[3] *= 786;
+            v[5] += t[3];
+            v[6] = v[4];
+            v[6] += me.xpos;
+            v[6] -= 851968;
+            v[7] = v[5];
+            v[7] += me.ypos;
+            v[7] += 65536;
+            PS1DrawSpriteXY(v[9], v[6], v[7]);
+            v[6] = v[4];
+            v[6] = -v[6];
+            v[6] += me.xpos;
+            v[6] += 851968;
+            PS1DrawSpriteXY(v[9], v[6], v[7]);
+            t[0]++;
+            t[4] += v[3];
+        }
+        // DrawSpriteFX OBJECTFRAME FX_FLIP OBJECTXPOS OBJECTYPOS: the VM's FX_FLIP case (directions past FLIP_XY: FLIP_NONE)
+        ObjectScript *o = &objectScriptList[me.type];
+        SpriteFrame *f  = &scriptFrames[o->frameListOffset + me.frame];
+        int dir = me.direction <= FLIP_XY ? me.direction : FLIP_NONE;
+        int sx  = (me.xpos >> 16) - xScrollOffset + ((dir & FLIP_X) ? -f->width - f->pivotX : f->pivotX);
+        int sy  = (me.ypos >> 16) - yScrollOffset + ((dir & FLIP_Y) ? -f->height - f->pivotY : f->pivotY);
+        DrawSpriteFlipped(sx, sy, f->width, f->height, f->sprX, f->sprY, dir, o->spriteSheetID);
+    }
+    v[11] ^= 1;
+}
+
+// Metropolis' Large Gear (Zone09 stage object, Acts 2 / 3; V4-111): update ~270 VM instructions with Sonic, ~430 with
+// Sonic & Tails (an 8-tooth position table, then per player 8 box tests, two tile collisions and the hub's), draw 2 x
+// ~40 a frame. Natively: one statement per script instruction, in order. The tooth tables are stage table values 70883
+// (x) / 70892 (y), as in the script. Patched in only when the subs and their jump-table entries match LARGEGEAR_SIG /
+// LARGEGEAR_DRAW_SIG (tools/scripts/patch_bytecode.py).
+static int PS1CollisionLeft(Entity &e); // below (VAR_OBJECTCOLLISIONLEFT's getter)
+static int PS1CollisionRight(Entity &e); // below (VAR_OBJECTCOLLISIONRIGHT's getter)
+__attribute__((optimize("Os"))) static void PS1LargeGearUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    auto set = [](int table, int index, int value) { // SetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            PS1ScriptWrite(table + index + 1, value);
+    };
+    me.rotation = globalVariables[17];
+    me.rotation &= 63;
+    v[0] = globalVariables[17];
+    if (me.propertyValue == 1) {
+        me.rotation = -me.rotation;
+        me.rotation += 104;
+        me.rotation &= 63;
+        v[0] = -v[0];
+        v[0] += 552;
+        v[0] &= 511;
+    }
+    t[0] = 0;
+    t[1] = v[0];
+    while (t[0] < 8) {
+        t[2] = Cos512(t[1]);
+        t[2] *= -75;
+        t[2] >>= 9;
+        set(70883, t[0], t[2]);
+        t[2] = Sin512(t[1]);
+        t[2] *= -75;
+        t[2] >>= 9;
+        set(70892, t[0], t[2]);
+        t[0]++;
+        t[1] += 64;
+    }
+    t[7] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[6]      = (v[2] & (1 << t[7])) >> t[7];
+        if (t[6] == 1)
+            p.ypos += 262144;
+        v[2] &= ~(1 << t[7]);
+        t[0] = 0;
+        t[5] = 9;
+        while (t[0] < 8) {
+            get(70883, t[0], t[1]);
+            get(70892, t[0], t[2]);
+            t[3] = t[1];
+            t[4] = t[2];
+            t[1] -= 10;
+            t[2] -= 10;
+            t[3] += 10;
+            t[4] += 10;
+            if (t[6] == 1)
+                PlatformCollision(&me, t[1], t[2], t[3], t[4], &p, 65536, 65536, 65536, 65536);
+            else
+                BoxCollision(&me, t[1], t[2], t[3], t[4], &p, 65536, 65536, 65536, 65536);
+            if (cr == 1) {
+                p.gravity = self;
+                v[2] |= 1 << t[7];
+                t[5] = t[0];
+            }
+            t[0]++;
+        }
+        if (t[5] < 8) {
+            get(70883, t[5], t[0]);
+            t[0] -= v[3 + t[5]]; // switch TEMP5: case 0 Sub TEMP0 OBJECTVALUE3 ... case 7 OBJECTVALUE10 (t[5] is 0-7 here)
+            t[0] <<= 16;
+            t[1] = t[0];
+            t[1] >>= 2;
+            t[0] += t[1];
+            p.xpos += t[0];
+        }
+        else {
+            if (t[6] == 1)
+                p.ypos -= 262144;
+        }
+        ap[0]          = objectEntityPos;
+        objectEntityPos = ap[6];
+        if (PS1_OBJ(objectEntityPos).xpos > PS1_OBJ(ap[0]).xpos)
+            ObjectRWallCollision(PS1CollisionLeft(PS1_OBJ(objectEntityPos)) - 1, 0, 0);
+        else
+            ObjectLWallCollision(PS1CollisionRight(PS1_OBJ(objectEntityPos)), 0, 0);
+        ObjectFloorCollision(0, PS1CollisionBottom(PS1_OBJ(objectEntityPos)), 0);
+        objectEntityPos = ap[0];
+        BoxCollision(&PS1_OBJ(objectEntityPos), -64, -8, 64, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        t[7]++;
+    }
+    for (int i = 0; i < 8; ++i) // GetTableValue OBJECTVALUE3 0 70883 ... OBJECTVALUE10 7 70883
+        get(70883, i, v[3 + i]);
+}
+__attribute__((optimize("Os"))) static void PS1LargeGearDraw()
+{
+    int *t          = scriptEng.temp;
+    int self        = objectEntityPos;
+    Entity &me      = objectEntityList[self];
+    int *v          = me.values;
+    ObjectScript *o = &objectScriptList[me.type];
+    auto rotated    = [&](int frame) { // DrawSpriteFX <frame> FX_ROTATE OBJECTXPOS OBJECTYPOS
+        SpriteFrame *f = &scriptFrames[o->frameListOffset + frame];
+        DrawSpriteRotated(me.direction, (me.xpos >> 16) - xScrollOffset, (me.ypos >> 16) - yScrollOffset, -f->pivotX, -f->pivotY,
+                          f->sprX, f->sprY, f->width, f->height, me.rotation, o->spriteSheetID);
+    };
+    // IfEqual OBJECTVALUE1 0: the 8 teeth (frame 0) then AddDrawListEntityRef 4; else the 8 bolts (frame 2) then the hub.
+    // The two branches' loops are the same but for the frame: one loop here.
+    t[0] = 0;
+    t[1] = me.rotation;
+    while (t[0] < 8) {
+        rotated(v[1] == 0 ? 0 : 2);
+        me.rotation += 64;
+        t[0]++;
+    }
+    me.rotation = t[1];
+    if (v[1] == 0) {
+        drawListEntries[4].entityRefs[drawListEntries[4].listSize++] = self;
+    }
+    else {
+        t[0] = Cos512(v[0]);
+        t[0] *= -28;
+        t[0] <<= 7;
+        t[0] += me.xpos;
+        t[1] = Sin512(v[0]);
+        t[1] *= -28;
+        t[1] <<= 7;
+        t[1] += me.ypos;
+        PS1DrawSpriteXY(1, t[0], t[1]);
+    }
+    v[1] ^= 1;
+}
+// Metropolis' Belt Platform (Zone09 stage object, the platforms on the gears' belts; V4-111): update ~45 VM instructions,
+// 16 of them on screen in Act 2. Natively: one statement per script instruction, in order; at a waypoint stage function
+// 148 (the next leg's velocity) runs in the VM. Patched in only when the sub and its jump-table entries match
+// MTZBELTPLAT_SIG.
+static void PS1CallScriptFunction(int fn, int foreachDepth); // below
+__attribute__((optimize("Os"))) static void PS1MTZBeltPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    int self   = objectEntityPos;
+    Entity &me = objectEntityList[self];
+    int *v     = me.values;
+    t[2] = 0;
+    t[0] = me.xpos;
+    t[1] = me.ypos;
+    t[0] >>= 16;
+    t[1] >>= 16;
+    t[1] &= 2047;
+    if (me.xvel < 0) {
+        if (me.yvel < 0) {
+            if (t[0] <= v[2]) {
+                if (t[1] <= v[3])
+                    t[2] = 1;
+            }
+        }
+        else {
+            if (t[0] <= v[2]) {
+                if (t[1] >= v[3])
+                    t[2] = 1;
+            }
+        }
+    }
+    else {
+        if (me.yvel < 0) {
+            if (t[0] >= v[2]) {
+                if (t[1] <= v[3])
+                    t[2] = 1;
+            }
+        }
+        else {
+            if (t[0] >= v[2]) {
+                if (t[1] >= v[3])
+                    t[2] = 1;
+            }
+        }
+    }
+    if (t[2] == 1) {
+        if (me.direction == 0) {
+            v[7] += 2;
+            if (v[7] > v[8])
+                v[7] = 0;
+        }
+        else {
+            v[7] -= 2;
+            if (v[7] < 0)
+                v[7] = v[8];
+        }
+        ap[0] = self;
+        PS1CallScriptFunction(148, 0);
+    }
+    t[0] = me.xpos;
+    t[0] &= -65536;
+    t[1] = me.ypos;
+    t[1] &= -65536;
+    t[2] = me.xpos;
+    t[2] += me.xvel;
+    t[3] = me.ypos;
+    t[3] += me.yvel;
+    v[4] = t[2];
+    v[4] &= -65536;
+    v[4] -= t[0];
+    v[5] = t[3];
+    v[5] &= -65536;
+    v[5] -= t[1];
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        PlatformCollision(&me, -16, -8, 16, 8, &p, 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            p.xpos += v[4];
+            p.ypos += v[5];
+        }
+    }
+    me.xpos = t[2];
+    me.ypos = t[3];
+}
+// Metropolis' Belt Activation (Zone09; V4-111): the update keeps its belt's platforms (entity slots value1 to value0 - 1)
+// active, the draw sets them to priority 5 while the stage runs, else 1; 16 slots x 3-4 VM instructions each, twice a
+// frame. Natively, one statement per script instruction. Patched in only on BELTACT_SIG / BELTACT_DRAW_SIG.
+static void PS1BeltActivationUpdate()
+{
+    int *ap    = scriptEng.arrayPosition;
+    Entity &me = objectEntityList[objectEntityPos];
+    ap[0]      = me.values[1];
+    while (ap[0] < me.values[0]) {
+        PS1_OBJ(ap[0]).priority = 1;
+        ap[0]++;
+    }
+}
+static void PS1BeltActivationDraw()
+{
+    int *ap    = scriptEng.arrayPosition;
+    Entity &me = objectEntityList[objectEntityPos];
+    ap[0]      = me.values[1];
+    while (ap[0] < me.values[0]) {
+        if (stageMode == 1)
+            PS1_OBJ(ap[0]).priority = 5;
+        else
+            PS1_OBJ(ap[0]).priority = 1;
+        ap[0]++;
+    }
+}
+// V Platform 2 (Zone09's, the same script in Emerald Hill, Chemical Plant, Aquatic Ruin, Hill Top, Wing Fortress where it
+// matches; V4-111): a platform bobbing on global table 24760 entry 14, carrying its riders; ~25 VM instructions with
+// Sonic & Tails. Natively, one statement per script instruction; GlobalCode function 50 (crushed) runs in the VM.
+// Patched in only on VPLAT2_SIG.
+__attribute__((optimize("Os"))) static void PS1VPlatform2Update()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    t[6] = me.ypos;
+    if (14 < scriptCode[24760]) // GetTableValue TEMP0 14 24760
+        t[0] = scriptCode[24760 + 14 + 1];
+    if (me.propertyValue == 1) {
+        t[0] = -t[0];
+        t[0] += 32768;
+    }
+    t[0] <<= 8;
+    me.ypos = v[0];
+    me.ypos += v[31];
+    me.ypos -= t[0];
+    t[6] &= -65536;
+    t[7] = me.ypos;
+    t[7] &= -65536;
+    t[7] -= t[6];
+    t[2] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = (v[1] & (1 << t[2])) >> t[2];
+        if (t[0] == 1)
+            p.ypos += t[7];
+        v[1] &= ~(1 << t[2]);
+        BoxCollision(&me, -32, -12, 32, 12, &p, 65536, 65536, 65536, 65536);
+        switch (cr) {
+            case 1: v[1] |= 1 << t[2]; break;
+            case 4:
+                if (p.gravity == 0)
+                    PS1CallScriptFunction(50, 1);
+                break;
+        }
+        t[2]++;
+    }
+}
+// Metropolis' Wheel Platform (Zone09, Act 3; V4-111): always active; within ~736 px of the camera it moves on two
+// global oscillators (table 24760 entries 16 / 18), carries its riders and tests seven boxes per player (~50 VM
+// instructions a player); its draw spins 16 cogs (rotated sprites) and draws its 7 pieces. Natively, one statement per
+// script instruction (the seven box tests from a table, in the script's order); GlobalCode function 50 (crushed) runs in
+// the VM. Patched in only on WHEELPLAT_SIG / WHEELPLAT_DRAW_SIG.
+__attribute__((optimize("Os"))) static void PS1WheelPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    static const int16_t box[7][4] = { { -64, -24, 64, 0 }, { -96, -24, -64, 24 }, { 64, -24, 96, 24 }, { -176, 4, -96, 20 },
+                                       { 96, 4, 176, 20 },  { -208, 0, -176, 24 },  { 176, 0, 208, 24 } };
+    v[15] = 1;
+    t[0]  = me.xpos;
+    t[0] >>= 16;
+    t[0] -= cameraXPos;
+    t[0] = abs(t[0]);
+    t[0] -= 576;
+    t[1] = me.ypos;
+    t[1] >>= 16;
+    t[1] -= cameraYPos;
+    t[1] = abs(t[1]);
+    t[1] -= 128;
+    if (t[0] >= SCREEN_CENTERX)
+        v[15] = 0;
+    if (t[1] >= SCREEN_CENTERY)
+        v[15] = 0;
+    if (v[15] != 1)
+        return;
+    get(24760, 16, v[0]);
+    v[0] >>= 8;
+    v[10] = v[0];
+    v[10] >>= 1;
+    v[0] -= 56;
+    v[10] -= 28;
+    get(24760, 18, v[1]);
+    v[1] >>= 8;
+    v[11] = v[1];
+    v[11] >>= 1;
+    v[1] -= 56;
+    v[11] -= 28;
+    t[0] = (me.propertyValue & 1) >> 0;
+    if (t[0] == 1) {
+        v[0] = -v[0];
+        v[1] = -v[1];
+        me.rotation += 34;
+    }
+    else {
+        me.rotation -= 34;
+    }
+    t[0] = (me.propertyValue & 2) >> 1;
+    if (t[0] == 1) {
+        v[0] = -v[0];
+        t[0] = v[0];
+        v[0] = v[1];
+        v[1] = t[0];
+    }
+    v[0] <<= 16;
+    v[0] += me.xpos;
+    v[1] <<= 16;
+    v[1] += me.ypos;
+    v[10] <<= 16;
+    v[11] <<= 16;
+    v[10] = -v[10];
+    v[11] = -v[11];
+    v[2] = v[0];
+    v[2] -= 8912896;
+    v[3] = v[1];
+    v[3] += 786432;
+    v[4] = v[0];
+    v[4] += 8912896;
+    v[5] = v[3];
+    v[6] = v[0];
+    v[6] -= 12582912;
+    v[7] = v[3];
+    v[8] = v[0];
+    v[8] += 12582912;
+    v[9] = v[3];
+    t[1] = v[0];
+    t[1] -= v[13];
+    t[2] = v[1];
+    t[2] -= v[14];
+    v[13]   = v[0];
+    v[14]   = v[1];
+    t[4]    = me.xpos;
+    t[5]    = me.ypos;
+    me.xpos = v[0];
+    me.ypos = v[1];
+    t[7]    = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[6]      = (v[12] & (1 << t[7])) >> t[7];
+        if (t[6] == 1) {
+            p.xpos += t[1];
+            p.ypos += t[2];
+        }
+        v[12] &= ~(1 << t[7]);
+        t[0] = 0;
+        for (int b = 0; b < 7; ++b) { // BoxCollisionTest 1 OBJECTENTITYPOS <box b> ARRAYPOS6 ..., then switch CHECKRESULT
+            BoxCollision(&me, box[b][0], box[b][1], box[b][2], box[b][3], &p, 65536, 65536, 65536, 65536);
+            switch (cr) {
+                case 1: v[12] |= 1 << t[7]; break;
+                case 4:
+                    if (p.gravity == 0)
+                        PS1CallScriptFunction(50, 1);
+                    break;
+            }
+        }
+        t[7]++;
+    }
+    me.xpos = t[4];
+    me.ypos = t[5];
+}
+__attribute__((optimize("Os"))) static void PS1WheelPlatformDraw()
+{
+    int *t          = scriptEng.temp;
+    Entity &me      = objectEntityList[objectEntityPos];
+    int *v          = me.values;
+    ObjectScript *o = &objectScriptList[me.type];
+    auto rotated    = [&](int frame, int x, int y) { // DrawSpriteFX <frame> FX_ROTATE x y
+        SpriteFrame *f = &scriptFrames[o->frameListOffset + frame];
+        DrawSpriteRotated(me.direction, (x >> 16) - xScrollOffset, (y >> 16) - yScrollOffset, -f->pivotX, -f->pivotY, f->sprX, f->sprY,
+                          f->width, f->height, me.rotation, o->spriteSheetID);
+    };
+    if (v[15] != 1)
+        return;
+    t[6] = me.xpos;
+    t[6] -= 12582912;
+    t[7] = me.ypos;
+    t[7] += 786432;
+    t[0]        = 0;
+    t[2]        = me.rotation;
+    me.rotation >>= 5;
+    me.rotation &= 511;
+    for (int side = 0; side < 2; ++side) { // the two WLower loops: at TEMP6, then at TEMP5 (TEMP0 = 0 again before it)
+        if (side) {
+            t[5] = me.xpos;
+            t[5] += 12582912;
+            t[0] = 0;
+        }
+        while (t[0] < 8) {
+            rotated(5, side ? t[5] : t[6], t[7]);
+            me.rotation += 64;
+            me.rotation &= 511;
+            t[0]++;
+        }
+    }
+    me.rotation = t[2];
+    t[6] += v[10];
+    t[7] += v[11];
+    PS1DrawSpriteXY(4, t[6], t[7]);
+    t[5] += v[10];
+    PS1DrawSpriteXY(4, t[5], t[7]);
+    PS1DrawSpriteXY(3, v[0], v[1]);
+    PS1DrawSpriteXY(2, v[2], v[3]);
+    PS1DrawSpriteXY(0, v[6], v[7]);
+    PS1DrawSpriteXY(2, v[4], v[5]);
+    PS1DrawSpriteXY(1, v[8], v[9]);
+}
+// Metropolis' M Platform (Zone09; V4-111): a platform moving by a 4-leg table (87247 x / 87252 y velocities, 87257
+// durations) while ridden, carrying its riders; ~20 VM instructions a player. Natively, one statement per script
+// instruction. Patched in only on MPLAT_SIG.
+__attribute__((optimize("Os"))) static void PS1MPlatformUpdate()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    auto get   = [](int table, int index, int &dst) { // GetTableValue
+        if (index >= 0 && index < scriptCode[table])
+            dst = scriptCode[table + index + 1];
+    };
+    me.xpos += me.xvel;
+    me.ypos += me.yvel;
+    t[0] = 0;
+    t[1] = 0;
+    t[2] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[3]      = (v[4] & (1 << t[2])) >> t[2];
+        if (t[3] == 1) {
+            p.xpos += me.xvel;
+            p.ypos += me.yvel;
+            t[1] = 1;
+        }
+        v[4] &= ~(1 << t[2]);
+        BoxCollision(&me, -32, -12, 32, 12, &p, 65536, 65536, 65536, 65536);
+        if (cr == 1) {
+            t[0] = 1;
+            v[4] |= 1 << t[2];
+        }
+        t[2]++;
+    }
+    if (v[0] == 0) {
+        if (t[0] == 0) {
+            if (t[1] == 1) {
+                get(87247, v[1], me.xvel);
+                get(87252, v[1], me.yvel);
+                get(87257, v[1], v[0]);
+                v[1]++;
+                v[1] &= 3;
+            }
+        }
+    }
+    else {
+        v[0]--;
+        if (v[0] == 0) {
+            me.xvel = 0;
+            me.yvel = 0;
+        }
+    }
+}
+// H Platform 2 (Zone09's; any stage whose listing matches; V4-111): a platform swinging on global table 24760 entry 14,
+// carrying its riders; ~25 VM instructions with Sonic & Tails. Natively, one statement per script instruction;
+// GlobalCode function 50 (crushed) runs in the VM. Patched in only on HPLAT2_SIG.
+__attribute__((optimize("Os"))) static void PS1HPlatform2Update()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    t[6] = me.xpos;
+    if (14 < scriptCode[24760]) // GetTableValue TEMP0 14 24760
+        t[0] = scriptCode[24760 + 14 + 1];
+    if (me.propertyValue == 1) {
+        t[0] = -t[0];
+        t[0] += 32768;
+    }
+    t[0] <<= 8;
+    me.xpos = v[0];
+    me.xpos -= t[0];
+    t[6] &= -65536;
+    t[7] = me.xpos;
+    t[7] &= -65536;
+    t[7] -= t[6];
+    t[2] = 0;
+    TypeGroupList &players = objectTypeGroupList[256];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        t[0]      = (v[1] & (1 << t[2])) >> t[2];
+        if (t[0] == 1)
+            p.xpos += t[7];
+        v[1] &= ~(1 << t[2]);
+        BoxCollision(&me, -32, -12, 32, 12, &p, 65536, 65536, 65536, 65536);
+        switch (cr) {
+            case 1: v[1] |= 1 << t[2]; break;
+            case 2:
+            case 3:
+                if (p.state == 24) {
+                    p.values[1] = 0;
+                    p.animation = globalVariables[86];
+                    p.state     = 22;
+                }
+                break;
+            case 4:
+                if (p.gravity == 0)
+                    PS1CallScriptFunction(50, 1);
+                break;
+        }
+        t[2]++;
+    }
+}
+// Metropolis' One Way Door (Zone09; V4-111): slides open while a player runs at it from its open side; solid otherwise;
+// ~25 VM instructions with Sonic & Tails. Natively, one statement per script instruction. Patched in only on OWDOOR_SIG.
+__attribute__((optimize("Os"))) static void PS1OneWayDoorUpdate()
+{
+    int *ap    = scriptEng.arrayPosition;
+    int &cr    = scriptEng.checkResult;
+    Entity &me = objectEntityList[objectEntityPos];
+    int *v     = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    if (me.state == 0) {
+        if (v[0] > 0)
+            v[0] -= 524288;
+    }
+    else {
+        if (v[0] < 4194304)
+            v[0] += 524288;
+    }
+    me.ypos -= v[0];
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6] = players.entityRefs[loop];
+        if (v[0] == 0)
+            BoxCollision(&me, -8, -32, 8, 32, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+        else
+            BoxCollision(&me, -8, -32, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+    }
+    me.ypos += v[0];
+    me.state = 0;
+    for (int loop = 0; loop < players.listSize; ++loop) {
+        ap[6]     = players.entityRefs[loop];
+        Entity &p = PS1_OBJ(ap[6]);
+        if (me.propertyValue == 0) {
+            if (p.xvel < 393216)
+                TouchCollision(&me, -64, -32, 8, 32, &p, 65536, 65536, 65536, 65536);
+            else
+                TouchCollision(&me, -88, -32, 8, 32, &p, 65536, 65536, 65536, 65536);
+        }
+        else {
+            if (p.xvel > -393216)
+                TouchCollision(&me, -8, -32, 64, 32, &p, 65536, 65536, 65536, 65536);
+            else
+                TouchCollision(&me, -8, -32, 88, 32, &p, 65536, 65536, 65536, 65536);
+        }
+        me.state |= cr;
+    }
 }
 
 // Hidden Palace's Bridge (stage object "Bridge" in Zone08, not Emerald Hill's; update 188 VM instructions, draw 49
@@ -11899,6 +12802,19 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1SPECIALHUDDRAW: scriptText[0] = '\0'; PS1SpecialHUDDraw(); break;
         case FUNC_PS1SPLOSERING: scriptText[0] = '\0'; PS1SpLoseRingUpdate(); break;
         case FUNC_PS1SPLOSERINGDRAW: scriptText[0] = '\0'; PS1SpLoseRingDraw(); break;
+        case FUNC_PS1JELLYGNITEDRAW: scriptText[0] = '\0'; PS1JellygniteDraw(); break;
+        case FUNC_PS1LARGEGEAR: scriptText[0] = '\0'; PS1LargeGearUpdate(); break;
+        case FUNC_PS1LARGEGEARDRAW: scriptText[0] = '\0'; PS1LargeGearDraw(); break;
+        case FUNC_PS1MTZBELTPLATFORM: scriptText[0] = '\0'; PS1MTZBeltPlatformUpdate(); break;
+        case FUNC_PS1BELTACTIVATION: scriptText[0] = '\0'; PS1BeltActivationUpdate(); break;
+        case FUNC_PS1BELTACTIVATIONDRAW: scriptText[0] = '\0'; PS1BeltActivationDraw(); break;
+        case FUNC_PS1VPLATFORM2: scriptText[0] = '\0'; PS1VPlatform2Update(); break;
+        case FUNC_PS1JELLYGNITE: scriptText[0] = '\0'; PS1JellygniteUpdate(); break;
+        case FUNC_PS1MPLATFORM: scriptText[0] = '\0'; PS1MPlatformUpdate(); break;
+        case FUNC_PS1HPLATFORM2: scriptText[0] = '\0'; PS1HPlatform2Update(); break;
+        case FUNC_PS1ONEWAYDOOR: scriptText[0] = '\0'; PS1OneWayDoorUpdate(); break;
+        case FUNC_PS1WHEELPLATFORM: scriptText[0] = '\0'; PS1WheelPlatformUpdate(); break;
+        case FUNC_PS1WHEELPLATFORMDRAW: scriptText[0] = '\0'; PS1WheelPlatformDraw(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -13932,6 +14848,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_SETLAYERDEFORMATION:
                 opcodeSize = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+                g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
                 SetLayerDeformation(scriptEng.operands[0], scriptEng.operands[1], scriptEng.operands[2], scriptEng.operands[3], scriptEng.operands[4],
                                     scriptEng.operands[5]);
                 break;
@@ -13951,6 +14870,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                 break;
             case FUNC_SETTILELAYERENTRY:
                 stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
+#if RETRO_PLATFORM == RETRO_PS1
+                g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
                 break;
             case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
             case FUNC_SETBIT:
@@ -14271,6 +15193,58 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1SPLOSERINGDRAW: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1SpLoseRingDraw();
+                break;
+            case FUNC_PS1JELLYGNITEDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1JellygniteDraw();
+                break;
+            case FUNC_PS1LARGEGEAR: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LargeGearUpdate();
+                break;
+            case FUNC_PS1LARGEGEARDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1LargeGearDraw();
+                break;
+            case FUNC_PS1MTZBELTPLATFORM: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1MTZBeltPlatformUpdate();
+                break;
+            case FUNC_PS1BELTACTIVATION: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1BeltActivationUpdate();
+                break;
+            case FUNC_PS1BELTACTIVATIONDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1BeltActivationDraw();
+                break;
+            case FUNC_PS1VPLATFORM2: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1VPlatform2Update();
+                break;
+            case FUNC_PS1JELLYGNITE: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1JellygniteUpdate();
+                break;
+            case FUNC_PS1MPLATFORM: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1MPlatformUpdate();
+                break;
+            case FUNC_PS1HPLATFORM2: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1HPlatform2Update();
+                break;
+            case FUNC_PS1ONEWAYDOOR: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1OneWayDoorUpdate();
+                break;
+            case FUNC_PS1WHEELPLATFORM: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1WheelPlatformUpdate();
+                break;
+            case FUNC_PS1WHEELPLATFORMDRAW: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1WheelPlatformDraw();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;
@@ -15440,10 +16414,30 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
                             newYBoundary2 = scriptEng.operands[i];
                         }
                         break;
-                    case VAR_STAGEDEFORMATIONDATA0: bgDeformationData0[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA1: bgDeformationData1[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA2: bgDeformationData2[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_STAGEDEFORMATIONDATA3: bgDeformationData3[arrayVal] = scriptEng.operands[i]; break;
+                    case VAR_STAGEDEFORMATIONDATA0:
+                        bgDeformationData0[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA1:
+                        bgDeformationData1[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA2:
+                        bgDeformationData2[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
+                    case VAR_STAGEDEFORMATIONDATA3:
+                        bgDeformationData3[arrayVal] = scriptEng.operands[i];
+#if RETRO_PLATFORM == RETRO_PS1
+                        g_ps1TileInputGen = g_ps1TileInputGen + 1;
+#endif
+                        break;
                     case VAR_STAGEWATERLEVEL: waterLevel = scriptEng.operands[i]; break;
                     case VAR_STAGEACTIVELAYER: activeTileLayers[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_STAGEMIDPOINT: tLayerMidPoint = scriptEng.operands[i]; break;

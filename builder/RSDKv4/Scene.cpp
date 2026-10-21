@@ -23,6 +23,7 @@ volatile uint32_t g_ps1ProfDrawHbl    = 0; // DrawStageGFX: draw subs (+ drawing
 // right; line-scroll bytes past TILELAYER_LINESCROLL_COUNT are dropped. Both counted for GDB.
 volatile uint32_t g_ps1LayerRowsClamped   = 0;
 volatile uint32_t g_ps1LineScrollClamped  = 0;
+int16_t g_ps1LayerOneEntry[LAYER_COUNT]; // V4-111: LoadStageBackground (the BG layers' one line-scroll entry, or -1)
 volatile uint32_t g_ps1Copy16x16Tile      = 0;
 volatile uint32_t g_ps1TileAttrClamped    = 0; // chunk tile attributes past a nibble (Scene.hpp Tiles128x128)
 static ushort s_ps1LayerScratchRow[TILELAYER_CHUNK_W];
@@ -1242,6 +1243,17 @@ void LoadStageBackground()
                     PS1_LINESCROLL_PUT(buf[0])
                 }
             }
+#if RETRO_PLATFORM == RETRO_PS1
+            { // V4-111: the parallax entry every drawn line of this layer uses, or -1 (ps1/render.cpp's one-entry BG path)
+                int lines = stageLayouts[i].ysize << 7;
+                lines     = lines < TILELAYER_LINESCROLL_COUNT ? lines : TILELAYER_LINESCROLL_COUNT;
+                int e     = stageLayouts[i].lineScroll[0];
+                for (int l = 1; l < lines && e >= 0; ++l)
+                    if (stageLayouts[i].lineScroll[l] != e)
+                        e = -1;
+                g_ps1LayerOneEntry[i] = (int16_t)e;
+            }
+#endif
 
             // Read Layout
             for (int y = 0; y < stageLayouts[i].ysize; ++y) {

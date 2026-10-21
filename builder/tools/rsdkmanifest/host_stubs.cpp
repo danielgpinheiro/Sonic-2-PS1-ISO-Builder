@@ -169,6 +169,7 @@ bool PS1AtlasLoad(const char *, int) { return false; }
 volatile uint32_t g_ps1SurfaceGen = 0;
 void PS1BuildTileVisuals() {}
 void PS1TileChanged(int) {}
+volatile uint32_t g_ps1TileInputGen = 0; // ps1/render.cpp
 void PS1Copy16x16Tile(int, int) {}
 void PS1LoadBGStrips(const char *, int) {}
 void PS1PaletteLinesChanged() {}

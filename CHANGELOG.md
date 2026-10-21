@@ -3,6 +3,24 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## Hidden Palace under water and Metropolis' giant gears at full speed (October 2026)
+
+- **Hidden Palace's flooded section runs at 60 frames a second**, as Sonic and as Sonic & Tails. Under water the
+  background and the level ripple, which made the console redraw the screen as many thin strips and slowed the game to
+  less than half speed (some tiles also went missing). The background's rippling rows are now prepared while the disc
+  is built, the level's front and back layers are drawn in one pass instead of two, and the Jellygnites run as native
+  code.
+- **Metropolis' giant gears (Acts 2 and 3) no longer slow the game down.** The gears, the conveyor belts' platforms, the
+  wheel platforms, the moving and swinging platforms and the one-way doors (the same door in Chemical Plant, Hill Top and
+  Death Egg) now run as native code instead of through the game's script interpreter; they behave exactly as before.
+- **Emerald Hill's Coconuts** (the monkey) no longer climbs into the treetop or into the ground after coming back on
+  screen: he restarts his climb where he should. The Hill Top seesaw was checked and works as in the original game:
+  you are launched from whichever end the ball lands opposite you.
+- Every change was checked to draw exactly the same pictures and play exactly the same as before, with the port's
+  automated tests in PCSX-Redux and DuckStation (new tests for each place).
+- The title screen shows the new build, `V CB40CC8F` (the RSDKv4-ps1 port's commit `cb40cc8`). The image's SHA-256
+  changes (the new value is in the README's Output section).
+
 ## Tester fixes: Death Egg gate, coloured emeralds, sprite edges (October 2026)
 
 - **Death Egg Zone: a spin dash after beating Mecha Sonic no longer takes you past the gate early.** On the PS1's

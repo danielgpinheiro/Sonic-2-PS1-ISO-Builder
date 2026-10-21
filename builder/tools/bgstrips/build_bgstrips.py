@@ -57,8 +57,17 @@ REGION_BYTES = 10 + 6 * MAX_PIECES
 PLAYERS = (('', ''), ('_t', '_t'), ('_k', '_k'), ('_st', '_st'))  # (atlas suffix, strips suffix)
 
 
-SEG_PIECES = 32  # BGS3 (Sonic 1): ps1/render.cpp PS1_STRIP_PIECES with PS1_GAME == 1
+SEG_PIECES = 32  # BGS3 (Sonic 1): ps1/render.cpp PS1_STRIP_PIECES with PS1_GAME == 1 (Sonic 2: MAX_PIECES, set in main)
 SEG_REGION_BYTES = 10 + 6 * SEG_PIECES
+# Sonic 2 (V4-110): BGS3 too, with its 9-piece region records, and rows reused across regions: a run of rows ends where
+# its content starts over (a period: Hidden Palace's crystal rows repeat every 4 rows), and a run equal to rows already
+# stored points at their VRAM spot (flags bit 7: no data in the file). Set in main for --game 2.
+SEG_REUSE = False
+# Rows to strip first, per stage and (layer, plane): the rows the camera sees where the BG ripples every 1-3 lines (the
+# builder can't tell from the data: the ripple tables are filled by the scripts). Hidden Palace: under water the camera
+# is at y 1556-2000, the BG (parallax 128) at y 778-1000: rows 48-77 (and a margin).
+SEG_PRIORITY_ROWS = {('Zone08', 1, 0): range(44, 80)}
+SEG_NO_DATA = 0x80  # region flags: spots shared with an earlier region, no data stored
 SEG_W = 256      # texels per piece
 # 4-bit CLUT slots the atlas may leave free (tools/atlas/build_atlas.py CLUT_SLOTS, first rows): rows 240-241 keep the
 # renderer's two-bank split (ps1/render.cpp PS1SplitFits)
@@ -279,9 +288,10 @@ def build_stage(data, name, atlas_suffix):
     # Select rows: thin ones first, then nearest to a thin row, while pieces fit.
     cands = []
     for ji, j in enumerate(jobs):
+        first = SEG_PRIORITY_ROWS.get((name, j['layer'], j['plane']), ()) if SEG_REUSE else ()
         for r in range(j['rows']):
             d = 0 if r in j['thin'] else (min(abs(r - t) for t in j['thin']) if j['thin'] else 1000 + r)
-            cands.append((d, ji, r))
+            cands.append((-1 if r in first else d, ji, r))
     cands.sort()
     used = free_grid(atl)
     selected = set()
@@ -454,13 +464,20 @@ def build_stage_seg(data, name, atlas_suffix, cache):
     # rows in line order, each group under the same group of the row above when it can (contiguous regions).
     cands = []
     for ji, j in enumerate(jobs):
+        first = SEG_PRIORITY_ROWS.get((name, j['layer'], j['plane']), ()) if SEG_REUSE else ()
         for r in range(j['rows']):
             d = 0 if r in j['thin'] else (min(abs(r - t) for t in j['thin']) if j['thin'] else 1000 + r)
-            cands.append((d, ji, r))
+            cands.append((-1 if r in first else d, ji, r))
     cands.sort()
     used = free_grid(atl)
     selected = set()
+    seen = {}  # (job, row content): a selected row (SEG_REUSE: equal rows share its spot)
     for d, ji, r in cands:
+        if SEG_REUSE:
+            key = (ji, jobs[ji]['img'][r * 16:r * 16 + 16].tobytes())
+            if key in seen:
+                selected.add((ji, r))
+                continue
         spots = []
         for hw in jobs[ji]['rinfo'][r]['hw']:
             s = alloc(used, hw, 16)
@@ -470,6 +487,8 @@ def build_stage_seg(data, name, atlas_suffix, cache):
             spots.append((s, hw))
         if len(spots) == len(jobs[ji]['rinfo'][r]['hw']):
             selected.add((ji, r))
+            if SEG_REUSE:
+                seen[key] = r
         else:
             for (x, y), hw in spots:
                 used[y:y + 16, x:x + hw] = 0
@@ -479,22 +498,54 @@ def build_stage_seg(data, name, atlas_suffix, cache):
         (the run shrinks from its end until every group fits)."""
         used = free_grid(atl)
         regions = []
-        for ji, j in enumerate(jobs):
-            r = 0
-            while r < j['rows']:
-                if (ji, r) not in selected:
-                    r += 1
+        placed = set()
+        # priority rows first (SEG_PRIORITY_ROWS), so they get the VRAM the selection counted for them
+        passes = [(ji, [r for r in range(j['rows']) if r in SEG_PRIORITY_ROWS.get((name, j['layer'], j['plane']), ())])
+                  for ji, j in enumerate(jobs)] if SEG_REUSE else []
+        passes += [(ji, list(range(j['rows']))) for ji, j in enumerate(jobs)]
+        for ji, order in passes:
+            j = jobs[ji]
+            pos = 0
+            while pos < len(order):
+                r = order[pos]
+                if (ji, r) not in selected or (ji, r) in placed:
+                    pos += 1
                     continue
                 start, ri = r, j['rinfo'][r]
                 cols = set(ri['cols'])
+                contents = [j['img'][start * 16:start * 16 + 16].tobytes()]
+                inorder = set(order)
                 r += 1
-                while (ji, r) in selected and r - start < 16:
+                while (ji, r) in selected and (ji, r) not in placed and r in inorder and r - start < 16:
                     rn = j['rinfo'][r]
                     if rn['gid'] != ri['gid'] or rn['bits4'] != ri['bits4'] or (ri['bits4'] and len(cols | set(rn['cols'])) > 15):
                         break
+                    c = j['img'][r * 16:r * 16 + 16].tobytes()
+                    if SEG_REUSE and c in contents:
+                        break  # the content repeats: the next run can reuse this one
+                    contents.append(c)
                     cols |= set(rn['cols'])
                     r += 1
                 n = r - start
+                if SEG_REUSE:  # rows equal to rows of a region already placed: its spot, no new VRAM
+                    run = j['img'][start * 16:(start + n) * 16]
+                    src = None
+                    for g in regions:
+                        if g['job'] is not j or g['gid'] != ri['gid'] or g['bits4'] != ri['bits4'] or g.get('same_as'):
+                            continue
+                        for o in range(0, g['lines'] // 16 - n + 1):
+                            if np.array_equal(j['img'][g['line0'] + 16 * o:g['line0'] + 16 * (o + n)], run):
+                                src = (g, o)
+                                break
+                        if src:
+                            break
+                    if src:
+                        g, o = src
+                        regions.append(dict(job=j, line0=start * 16, lines=n * 16, spots=[(x, y + 16 * o) for x, y in g['spots']],
+                                            gid=ri['gid'], gw=ri['gw'], bits4=ri['bits4'], cols=g['cols'], same_as=g))
+                        placed.update((ji, k) for k in range(start, start + n))
+                        pos = order.index(start) + n
+                        continue
                 while n:
                     spots = []
                     for hw in ri['hw']:
@@ -509,14 +560,16 @@ def build_stage_seg(data, name, atlas_suffix, cache):
                         used[y:y + 16 * n, x:x + hw] = 0
                     n -= 1
                 if not n:  # not even one row fits here: drawn with tiles
-                    r = start + 1
+                    placed.add((ji, start))
+                    pos = order.index(start) + 1
                     continue
                 cols = set()
                 for k in range(start, start + n):
                     cols |= set(j['rinfo'][k]['cols'])
                 regions.append(dict(job=j, line0=start * 16, lines=n * 16, spots=spots, gid=ri['gid'], gw=ri['gw'],
                                     bits4=ri['bits4'], cols=sorted(cols)))
-                r = start + n
+                placed.update((ji, k) for k in range(start, start + n))
+                pos = order.index(start) + n
         chosen = {(jobs.index(g['job']), g['line0'] // 16 + k) for g in regions for k in range(g['lines'] // 16)}
         return chosen, regions
 
@@ -532,7 +585,7 @@ def build_stage_seg(data, name, atlas_suffix, cache):
     aslots = atlas_clut_slots(atl)
     free_slots = [s for s in SEG_CLUT_SLOTS if s not in aslots]
     bins = []  # colour sets
-    for g in sorted((g for g in regions if g['bits4']), key=lambda g: -len(g['cols'])):
+    for g in sorted((g for g in regions if g['bits4'] and not g.get('same_as')), key=lambda g: -len(g['cols'])):
         fit = [(len(b & set(g['cols'])), k) for k, b in enumerate(bins) if len(b | set(g['cols'])) <= 15]
         if fit:
             k = max(fit)[1]
@@ -543,8 +596,11 @@ def build_stage_seg(data, name, atlas_suffix, cache):
         g['clut'] = k
     maps = [[0] + sorted(b) + [0] * (15 - len(b)) for b in bins]
     for g in regions:
-        if g['bits4']:
+        if g['bits4'] and not g.get('same_as'):
             g['cols'] = sorted(bins[g['clut']])  # texel values index the shared map
+    for g in regions:
+        if g.get('same_as'):
+            g['clut'], g['cols'] = g['same_as'].get('clut', 0), g['same_as']['cols']
     if len(maps) > len(free_slots) or len(maps) + len(aslots) > MAX_CLUTS:
         raise StripError('%s: %d strip CLUTs, %d free slots' % (name, len(maps), len(free_slots)))
 
@@ -554,13 +610,15 @@ def build_stage_seg(data, name, atlas_suffix, cache):
     blob = bytearray()
     for g in regions:
         j = g['job']
-        flags = (1 | (g['clut'] << 1)) if g['bits4'] else 0
+        flags = ((1 | (g['clut'] << 1)) if g['bits4'] else 0) | (SEG_NO_DATA if g.get('same_as') else 0)
         ent = struct.pack('<BBHHHBB', j['layer'], j['plane'], g['line0'], g['lines'], j['period'], len(j['pieces']), flags)
         for k in range(SEG_PIECES):
             ent += struct.pack('<HHH', *(g['spots'][g['gid'][k]] + (j['pieces'][k],))) if k < len(j['pieces']) else \
                 struct.pack('<HHH', 0, 0, 0)
         assert len(ent) == SEG_REGION_BYTES
         out += ent
+        if g.get('same_as'):
+            continue
         rows = j['img'][g['line0']:g['line0'] + g['lines']]
         lut = np.zeros(256, np.uint8)
         if g['bits4']:
@@ -598,23 +656,27 @@ def check_seg(blob, regions, gfx, tiles, name, cache):
     maps = [blob[8 + 20 * k + 4:8 + 20 * k + 20] for k in range(nclut)]
     base = 8 + 20 * nclut
     off = base + count * SEG_REGION_BYTES
+    vram = {}  # (x, y line) -> the row stored there (spots shared across regions: SEG_NO_DATA)
     for i, g in enumerate(regions):
         e = blob[base + i * SEG_REGION_BYTES:base + (i + 1) * SEG_REGION_BYTES]
         layer, plane, line0, lines, period, npieces, flags = struct.unpack_from('<BBHHHBB', e, 0)
         pcs = [struct.unpack_from('<HHH', e, 10 + 6 * k) for k in range(npieces)]
-        spot = {}
-        for x, y, w in pcs:
-            if (x, y) in spot:
-                continue
-            n = w // 2 if flags & 1 else w
-            spot[(x, y)] = [blob[off + r * n:off + (r + 1) * n] for r in range(lines)]
-            off += n * lines
+        if not flags & SEG_NO_DATA:
+            stored = set()
+            for x, y, w in pcs:
+                if (x, y) in stored:
+                    continue
+                stored.add((x, y))
+                n = w // 2 if flags & 1 else w
+                for r in range(lines):
+                    vram[(x, y + r)] = blob[off + r * n:off + (r + 1) * n]
+                off += n * lines
         for r in range(lines):
             ln = bytearray()
             for x, y, w in pcs:
-                row = spot[(x, y)][r]
+                row = vram[(x, y + r)]
                 if flags & 1:
-                    m = maps[flags >> 1]
+                    m = maps[(flags >> 1) & 63]
                     for b in row:
                         ln += bytes((m[b & 15], m[b >> 4]))
                 else:
@@ -652,7 +714,11 @@ def main():
         print(__doc__)
         sys.exit(1)
     data = args[0]
-    seg = '--game' in args and args[args.index('--game') + 1] == '1'
+    game = args[args.index('--game') + 1] if '--game' in args else '2'
+    seg = True  # BGS3 for both games (Sonic 2 since V4-110); build_stage (BGS2) kept for reference
+    if game == '2':
+        global SEG_PIECES, SEG_REGION_BYTES, SEG_REUSE
+        SEG_PIECES, SEG_REGION_BYTES, SEG_REUSE = MAX_PIECES, 10 + 6 * MAX_PIECES, True
     names = [args[args.index('--stage') + 1]] if '--stage' in args else sorted(os.listdir(os.path.join(data, 'Stages')))
     cache = {}
     for name in names:

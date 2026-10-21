@@ -63,7 +63,8 @@ void PS1ChainSprite16(const psyqo::Prim::Sprite16x16 &s);      // batched (tiles
 void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex);
 // Bulk version for tile bands: n 16x16 sprites (colour 0x80) from xy[] / tex[] words, written straight
 // into exact-size fragments of <= 4 sprites (no per-tile call or constructor). Keeps the draw order.
-void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n);
+void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n, int stride = 1);
+inline void PS1ChainSprite16RawPairs(const uint32_t *pairs, int n) { PS1ChainSprite16RawN(pairs, pairs + 1, n, 2); } // {xy, tex} pairs
 // Bulk variable-size sprites (GP0 64h, colour 0x80): n sprites of 3 words each {xy, u|v<<8|clut<<16,
 // w|h<<16} in `words`, into exact-size fragments of <= 3 sprites (12 words). Keeps the draw order.
 void PS1ChainSpriteRawN(const uint32_t *words, int n);
@@ -92,6 +93,9 @@ void PS1ChainBulkKeep(int used);
 uint32_t *PS1ChainOTRaw(int words);
 void PS1ChainCaptureBegin();
 bool PS1ChainCaptureEnd(uint32_t **first, uint32_t **last, uint32_t *countWord);
+//  - PS1ChainSplice(first, last, countWord): a captured sub-list linked into the frame's chain now (V4-110: the FG's high
+//    plane, walked with its low plane and chained at its own slot).
+void PS1ChainSplice(uint32_t *first, uint32_t *last, uint32_t countWord);
 uint32_t *PS1ChainOTBegin(int n);
 #endif
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
