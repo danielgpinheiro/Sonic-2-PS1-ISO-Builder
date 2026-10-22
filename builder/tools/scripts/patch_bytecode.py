@@ -8831,7 +8831,677 @@ S1ZONEOBJ_SIGS = {
         'JT 56 IfLower @58 @59',
     ],
 }
-S1ZONE_OBJS = (('Door', 0, ()), ('Door Horizontal', 1, ()), ('Invisible Block', 2, (51,)))
+S1BELTPLAT_SIG = [  # Scrap Brain's Belt Platform update sub (Zone06), with its jump-table entries (V4-120)
+    'Equal TEMP0 OBJECTXPOS',
+    'Equal TEMP1 OBJECTYPOS',
+    'ShR TEMP0 16',
+    'ShR TEMP1 16',
+    'IfEqual 0 TEMP0 OBJECTVALUE0',
+    'IfEqual 2 TEMP1 OBJECTVALUE1',
+    'Add OBJECTVALUE5 2',
+    'IfGreater 4 OBJECTVALUE5 OBJECTVALUE6',
+    'Equal OBJECTVALUE5 0',
+    'endif',
+    'Equal ARRAYPOS0 OBJECTENTITYPOS',
+    'CallFunction 131',
+    'endif',
+    'endif',
+    'IfNotEqual 6 OBJECTROTATION 0',
+    'Inc OBJECTROTATION',
+    'And OBJECTROTATION 15',
+    'else',
+    'IfGreater 8 OBJECTVALUE5 2',
+    'Inc OBJECTROTATION',
+    'endif',
+    'endif',
+    'Equal TEMP0 OBJECTROTATION',
+    'GetTableValue OBJECTDIRECTION TEMP0 69194',
+    'And TEMP0 7',
+    'GetTableValue OBJECTFRAME TEMP0 69185',
+    'Equal TEMP0 OBJECTXPOS',
+    'And TEMP0 -65536',
+    'Equal TEMP1 OBJECTYPOS',
+    'And TEMP1 -65536',
+    'Equal TEMP2 OBJECTXPOS',
+    'Add TEMP2 OBJECTXVEL',
+    'Equal TEMP3 OBJECTYPOS',
+    'Add TEMP3 OBJECTYVEL',
+    'Equal OBJECTVALUE2 TEMP2',
+    'And OBJECTVALUE2 -65536',
+    'Sub OBJECTVALUE2 TEMP0',
+    'Equal OBJECTVALUE3 TEMP3',
+    'And OBJECTVALUE3 -65536',
+    'Sub OBJECTVALUE3 TEMP1',
+    'IfEqual 10 OBJECTROTATION 0',
+    'ForEachActive 12 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -16 -7 16 7 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 14 CHECKRESULT 1',
+    'Add OBJECTXPOS[1,1,6] OBJECTVALUE2',
+    'Add OBJECTYPOS[1,1,6] OBJECTVALUE3',
+    'endif',
+    'next',
+    'endif',
+    'Equal OBJECTXPOS TEMP2',
+    'Equal OBJECTYPOS TEMP3',
+    'End',
+    'JT 4 IfEqual @13 @14',
+    'JT 5 IfEqual @12 @13',
+    'JT 7 IfGreater @9 @10',
+    'JT 14 IfNotEqual @18 @22',
+    'JT 18 IfGreater @20 @21',
+    'JT 40 IfEqual @48 @49',
+    'JT 41 ForEachActive @41 @48',
+    'JT 43 IfEqual @46 @47',
+]
+
+S1SPINPLAT_SIG = [  # Scrap Brain's Spin Platform update sub (Zone06), with its jump-table entries (V4-120)
+    'Equal TEMP0 LOCAL[1,0,52319]',
+    'And TEMP0 OBJECTVALUE2',
+    'IfEqual 0 TEMP0 0',
+    'Equal OBJECTSTATE 1',
+    'Equal OBJECTPRIORITY 1',
+    'endif',
+    'Equal TEMP0 0',
+    'IfNotEqual 2 OBJECTSTATE 0',
+    'Dec OBJECTVALUE0',
+    'IfLower 4 OBJECTVALUE0 0',
+    'Equal TEMP0 1',
+    'Equal OBJECTVALUE0 OBJECTVALUE1',
+    'Equal OBJECTSTATE 0',
+    'endif',
+    'endif',
+    'IfNotEqual 6 OBJECTROTATION 0',
+    'Inc OBJECTROTATION',
+    'And OBJECTROTATION 31',
+    'else',
+    'IfNotEqual 8 TEMP0 0',
+    'Inc OBJECTROTATION',
+    'endif',
+    'endif',
+    'Equal TEMP0 OBJECTROTATION',
+    'ShR TEMP0 1',
+    'GetTableValue OBJECTDIRECTION TEMP0 72096',
+    'And TEMP0 7',
+    'GetTableValue OBJECTFRAME TEMP0 72087',
+    'IfEqual 10 OBJECTROTATION 0',
+    'ForEachActive 12 256 ARRAYPOS6',
+    'BoxCollisionTest 1 OBJECTENTITYPOS -16 -7 16 7 ARRAYPOS6 65536 65536 65536 65536',
+    'next',
+    'endif',
+    'End',
+    'JT 2 IfEqual @5 @6',
+    'JT 7 IfNotEqual @14 @15',
+    'JT 9 IfLower @13 @14',
+    'JT 15 IfNotEqual @19 @23',
+    'JT 19 IfNotEqual @21 @22',
+    'JT 28 IfEqual @32 @33',
+    'JT 29 ForEachActive @29 @32',
+]
+
+S1VANISHPLAT_SIG = [  # Scrap Brain's Vanish Platform update sub (Zone06), with its jump-table entries (V4-120)
+    'IfEqual 0 OBJECTSTATE 0',
+    'Equal TEMP0 LOCAL[1,0,52319]',
+    'Sub TEMP0 OBJECTVALUE2',
+    'And TEMP0 OBJECTVALUE3',
+    'IfEqual 2 TEMP0 0',
+    'Equal OBJECTSTATE 1',
+    'Equal OBJECTPRIORITY 1',
+    'endif',
+    'endif',
+    'IfNotEqual 4 OBJECTSTATE 0',
+    'Dec OBJECTVALUE0',
+    'IfLower 6 OBJECTVALUE0 0',
+    'IfEqual 8 OBJECTANIMATION 0',
+    'Equal OBJECTVALUE0 OBJECTVALUE1',
+    'else',
+    'Equal OBJECTVALUE0 127',
+    'endif',
+    'Xor OBJECTANIMATION 1',
+    'endif',
+    'IfEqual 10 OBJECTANIMATION 0',
+    'IfLower 12 OBJECTFRAME 3',
+    'Inc OBJECTANIMATIONTIMER',
+    'IfEqual 14 OBJECTANIMATIONTIMER 8',
+    'Equal OBJECTANIMATIONTIMER 0',
+    'Inc OBJECTFRAME',
+    'endif',
+    'endif',
+    'else',
+    'IfGreater 16 OBJECTFRAME 0',
+    'Inc OBJECTANIMATIONTIMER',
+    'IfEqual 18 OBJECTANIMATIONTIMER 8',
+    'Equal OBJECTANIMATIONTIMER 0',
+    'Dec OBJECTFRAME',
+    'endif',
+    'endif',
+    'endif',
+    'GetBit TEMP0 OBJECTFRAME 1',
+    'IfNotEqual 20 TEMP0 0',
+    'ForEachActive 22 256 ARRAYPOS6',
+    'BoxCollisionTest 3 OBJECTENTITYPOS -16 -8 16 8 ARRAYPOS6 65536 65536 65536 65536',
+    'next',
+    'endif',
+    'endif',
+    'Equal TEMP0 SCREENCAMERAX',
+    'Sub TEMP0 OBJECTIXPOS',
+    'Abs TEMP0',
+    'Sub TEMP0 128',
+    'IfGreater 24 TEMP0 SCREENXCENTER',
+    'Equal OBJECTSTATE 0',
+    'Equal OBJECTVALUE0 127',
+    'Equal OBJECTPRIORITY 3',
+    'Equal OBJECTANIMATION 0',
+    'Equal OBJECTFRAME 0',
+    'Equal OBJECTANIMATIONTIMER 0',
+    'endif',
+    'End',
+    'JT 0 IfEqual @8 @9',
+    'JT 4 IfEqual @7 @8',
+    'JT 9 IfNotEqual @42 @43',
+    'JT 11 IfLower @18 @19',
+    'JT 12 IfEqual @15 @17',
+    'JT 19 IfEqual @28 @36',
+    'JT 20 IfLower @26 @27',
+    'JT 22 IfEqual @25 @26',
+    'JT 28 IfGreater @34 @35',
+    'JT 30 IfEqual @33 @34',
+    'JT 37 IfNotEqual @41 @42',
+    'JT 38 ForEachActive @38 @41',
+    'JT 47 IfGreater @54 @55',
+]
+
+CATERK_SIG = [  # Caterkiller's update sub (Zones 02 / 03 / 06; Zone06's ids as {A} = touches, {B} = grip, {R} = reset), with its jump-table entries (V4-120)
+    'switch 0 OBJECTSTATE',
+    'Equal OBJECTPRIORITY 1',
+    'IfEqual 10 OBJECTVALUE14 0',
+    'Equal OBJECTVALUE14 15',
+    'Inc OBJECTSTATE',
+    'Equal OBJECTFRAME -1',
+    'Equal OBJECTVALUE7 -1',
+    'else',
+    'Dec OBJECTVALUE14',
+    'CallFunction {A}',
+    'break',
+    'endif',
+    'IfEqual 12 OBJECTVALUE14 0',
+    'Equal OBJECTVALUE14 7',
+    'Inc OBJECTSTATE',
+    'else',
+    'Dec OBJECTVALUE14',
+    'IfEqual 14 OBJECTVALUE2 0',
+    'Sub OBJECTVALUE0 16384',
+    'else',
+    'Add OBJECTVALUE0 16384',
+    'endif',
+    'IfEqual 16 OBJECTVALUE6 0',
+    'Sub OBJECTVALUE4 32768',
+    'else',
+    'Add OBJECTVALUE4 32768',
+    'endif',
+    'IfEqual 18 OBJECTVALUE10 0',
+    'Sub OBJECTVALUE8 49152',
+    'else',
+    'Add OBJECTVALUE8 49152',
+    'endif',
+    'Inc OBJECTFRAME',
+    'Inc OBJECTVALUE7',
+    'CallFunction {B}',
+    'CallFunction {A}',
+    'endif',
+    'break',
+    'IfEqual 20 OBJECTVALUE14 0',
+    'Equal OBJECTVALUE14 15',
+    'Inc OBJECTSTATE',
+    'Equal OBJECTFRAME 16',
+    'Equal OBJECTVALUE7 16',
+    'else',
+    'Dec OBJECTVALUE14',
+    'CallFunction {A}',
+    'break',
+    'endif',
+    'IfEqual 22 OBJECTVALUE14 0',
+    'Equal OBJECTVALUE14 7',
+    'Equal OBJECTSTATE 1',
+    'else',
+    'Dec OBJECTVALUE14',
+    'IfEqual 24 OBJECTDIRECTION 0',
+    'Sub OBJECTXPOS 49152',
+    'else',
+    'Add OBJECTXPOS 49152',
+    'endif',
+    'IfEqual 26 OBJECTVALUE2 0',
+    'Sub OBJECTVALUE0 32768',
+    'else',
+    'Add OBJECTVALUE0 32768',
+    'endif',
+    'IfEqual 28 OBJECTVALUE6 0',
+    'Sub OBJECTVALUE4 16384',
+    'else',
+    'Add OBJECTVALUE4 16384',
+    'endif',
+    'Dec OBJECTFRAME',
+    'Dec OBJECTVALUE7',
+    'CallFunction {B}',
+    'CallFunction {A}',
+    'endif',
+    'break',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'Add OBJECTYVEL 14336',
+    'IfGreater 30 OBJECTYVEL 0',
+    'ObjectTileCollision 0 0 8 0',
+    'IfEqual 32 CHECKRESULT 1',
+    'Equal OBJECTYVEL -262144',
+    'endif',
+    'endif',
+    'ForEachActive 34 256 ARRAYPOS6',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 OBJECTVALUE40[1,1,6] OBJECTVALUE38[1,1,6] OBJECTVALUE41[1,1,6] OBJECTVALUE39[1,1,6]',
+    'IfEqual 36 CHECKRESULT 1',
+    'IfLower 38 OBJECTFRAME 16',
+    'CallFunction 45',
+    'else',
+    'CallFunction 46',
+    'endif',
+    'endif',
+    'next',
+    'IfEqual 40 OBJECTOUTOFBOUNDS 1',
+    'Equal OBJECTTYPE 0',
+    'endif',
+    'break',
+    'endswitch',
+    'IfNotEqual 42 OBJECTSTATE 5',
+    'IfEqual 44 OBJECTOUTOFBOUNDS 1',
+    'Equal TEMP0 OBJECTXPOS',
+    'Equal TEMP1 OBJECTYPOS',
+    'Equal OBJECTXPOS OBJECTVALUE12',
+    'Equal OBJECTYPOS OBJECTVALUE13',
+    'IfEqual 46 OBJECTOUTOFBOUNDS 1',
+    'Equal ARRAYPOS0 OBJECTENTITYPOS',
+    'Equal TEMP7 OBJECTPROPERTYVALUE[1,1,0]',
+    'CallFunction {R}',
+    'else',
+    'Equal OBJECTXPOS TEMP0',
+    'Equal OBJECTYPOS TEMP1',
+    'endif',
+    'endif',
+    'endif',
+    'End',
+    'JT 0 switch 0 5 @97 @98 @1 @2 @12 @38 @48 @74',
+    'JT 2 IfEqual @8 @12',
+    'JT 12 IfEqual @16 @37',
+    'JT 17 IfEqual @20 @22',
+    'JT 22 IfEqual @25 @27',
+    'JT 27 IfEqual @30 @32',
+    'JT 38 IfEqual @44 @48',
+    'JT 48 IfEqual @52 @73',
+    'JT 53 IfEqual @56 @58',
+    'JT 58 IfEqual @61 @63',
+    'JT 63 IfEqual @66 @68',
+    'JT 77 IfGreater @82 @83',
+    'JT 79 IfEqual @81 @82',
+    'JT 83 ForEachActive @83 @93',
+    'JT 85 IfEqual @91 @92',
+    'JT 86 IfLower @89 @91',
+    'JT 93 IfEqual @95 @96',
+    'JT 98 IfNotEqual @113 @114',
+    'JT 99 IfEqual @112 @113',
+    'JT 104 IfEqual @109 @112',
+]
+
+CATERK_FN_A_SIG = [  # Caterkiller's stage function {A} (Zone06's 100): the touch boxes and the break-up into temp objects of type {T}
+    'Equal TEMP7 0',
+    'Equal TEMP5 OBJECTXPOS',
+    'Equal TEMP6 OBJECTYPOS',
+    'ForEachActive 0 256 ARRAYPOS6',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 OBJECTVALUE40[1,1,6] OBJECTVALUE38[1,1,6] OBJECTVALUE41[1,1,6] OBJECTVALUE39[1,1,6]',
+    'IfEqual 2 CHECKRESULT 1',
+    'CallFunction 45',
+    'else',
+    'Equal OBJECTXPOS OBJECTVALUE0',
+    'Equal OBJECTYPOS OBJECTVALUE1',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 4 CHECKRESULT 1',
+    'CallFunction 46',
+    'Equal TEMP7 1',
+    'else',
+    'Equal OBJECTXPOS OBJECTVALUE4',
+    'Equal OBJECTYPOS OBJECTVALUE5',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 6 CHECKRESULT 1',
+    'CallFunction 46',
+    'Equal TEMP7 1',
+    'else',
+    'Equal OBJECTXPOS OBJECTVALUE8',
+    'Equal OBJECTYPOS OBJECTVALUE9',
+    'BoxCollisionTest 0 OBJECTENTITYPOS -8 -8 8 8 ARRAYPOS6 65536 65536 65536 65536',
+    'IfEqual 8 CHECKRESULT 1',
+    'CallFunction 46',
+    'Equal TEMP7 1',
+    'endif',
+    'endif',
+    'endif',
+    'endif',
+    'Equal OBJECTXPOS TEMP5',
+    'Equal OBJECTYPOS TEMP6',
+    'next',
+    'IfEqual 10 TEMP7 1',
+    'Equal TEMP0 OBJECTFRAME',
+    'ShL TEMP0 15',
+    'Sub OBJECTYPOS TEMP0',
+    'CreateTempObject {T} 0 OBJECTXPOS OBJECTYPOS',
+    'IfEqual 12 OBJECTDIRECTION 0',
+    'Equal OBJECTXVEL[1,1,8] -131072',
+    'else',
+    'Equal OBJECTXVEL[1,1,8] 131072',
+    'endif',
+    'Equal OBJECTYVEL[1,1,8] -262144',
+    'Equal OBJECTDIRECTION[1,1,8] OBJECTDIRECTION',
+    'Equal OBJECTFRAME[1,1,8] OBJECTFRAME',
+    'And OBJECTFRAME[1,1,8] 8',
+    'Equal OBJECTSTATE[1,1,8] 5',
+    'Equal OBJECTPRIORITY[1,1,8] 7',
+    'CreateTempObject {T} 0 OBJECTVALUE0 OBJECTVALUE1',
+    'IfEqual 14 OBJECTVALUE2 0',
+    'Equal OBJECTXVEL[1,1,8] -98304',
+    'else',
+    'Equal OBJECTXVEL[1,1,8] 98304',
+    'endif',
+    'Equal OBJECTYVEL[1,1,8] -262144',
+    'Equal OBJECTDIRECTION[1,1,8] OBJECTVALUE2',
+    'Equal OBJECTFRAME[1,1,8] 16',
+    'Equal OBJECTSTATE[1,1,8] 5',
+    'Equal OBJECTPRIORITY[1,1,8] 7',
+    'Equal TEMP0 OBJECTVALUE7',
+    'ShL TEMP0 15',
+    'Sub OBJECTVALUE5 TEMP0',
+    'Sub OBJECTFRAME TEMP0',
+    'CreateTempObject {T} 0 OBJECTVALUE4 OBJECTVALUE5',
+    'IfEqual 16 OBJECTVALUE6 0',
+    'Equal OBJECTXVEL[1,1,8] 98304',
+    'else',
+    'Equal OBJECTXVEL[1,1,8] -98304',
+    'endif',
+    'Equal OBJECTYVEL[1,1,8] -262144',
+    'Equal OBJECTDIRECTION[1,1,8] OBJECTVALUE6',
+    'Equal OBJECTFRAME[1,1,8] 16',
+    'Equal OBJECTSTATE[1,1,8] 5',
+    'Equal OBJECTPRIORITY[1,1,8] 7',
+    'CreateTempObject {T} 0 OBJECTVALUE8 OBJECTVALUE9',
+    'IfEqual 18 OBJECTVALUE10 0',
+    'Equal OBJECTXVEL[1,1,8] 131072',
+    'else',
+    'Equal OBJECTXVEL[1,1,8] -131072',
+    'endif',
+    'Equal OBJECTYVEL[1,1,8] -262144',
+    'Equal OBJECTDIRECTION[1,1,8] OBJECTVALUE10',
+    'Equal OBJECTFRAME[1,1,8] 16',
+    'Equal OBJECTSTATE[1,1,8] 5',
+    'Equal OBJECTPRIORITY[1,1,8] 7',
+    'ResetObjectEntity OBJECTENTITYPOS 0 0 OBJECTXPOS OBJECTYPOS',
+    'endif',
+    'return',
+    'JT 3 ForEachActive @3 @35',
+    'JT 5 IfEqual @8 @32',
+    'JT 11 IfEqual @15 @31',
+    'JT 18 IfEqual @22 @30',
+    'JT 25 IfEqual @28 @29',
+    'JT 35 IfEqual @89 @90',
+    'JT 40 IfEqual @43 @45',
+    'JT 52 IfEqual @55 @57',
+    'JT 67 IfEqual @70 @72',
+    'JT 78 IfEqual @81 @83',
+]
+
+CATERK_FN_B_SIG = [  # Caterkiller's stage function {B} (Zone06's 102): the pieces' floor grip; {C} = the slope check
+    'IfNotEqual 0 OBJECTSTATE 2',
+    'ObjectTileGrip 0 0 8 0',
+    'IfEqual 2 CHECKRESULT 0',
+    'Xor OBJECTDIRECTION 1',
+    'endif',
+    'Equal TEMP0 OBJECTXPOS',
+    'Equal TEMP1 OBJECTYPOS',
+    'Equal TEMP2 TEMP0',
+    'Equal TEMP3 TEMP1',
+    'Equal TEMP4 OBJECTDIRECTION',
+    'CallFunction {C}',
+    'IfEqual 4 CHECKRESULT 1',
+    'Xor OBJECTDIRECTION 1',
+    'endif',
+    'else',
+    'Equal TEMP0 OBJECTXPOS',
+    'Equal TEMP1 OBJECTYPOS',
+    'endif',
+    'Equal OBJECTXPOS OBJECTVALUE0',
+    'Equal OBJECTYPOS OBJECTVALUE1',
+    'ObjectTileGrip 0 0 8 0',
+    'IfEqual 6 CHECKRESULT 0',
+    'Equal OBJECTVALUE2 OBJECTDIRECTION',
+    'endif',
+    'Equal OBJECTVALUE1 OBJECTYPOS',
+    'Equal TEMP2 OBJECTVALUE0',
+    'Equal TEMP3 OBJECTVALUE1',
+    'Equal TEMP4 OBJECTVALUE2',
+    'CallFunction {C}',
+    'IfEqual 8 CHECKRESULT 1',
+    'Equal OBJECTVALUE2 OBJECTDIRECTION',
+    'endif',
+    'Equal OBJECTXPOS OBJECTVALUE4',
+    'Equal OBJECTYPOS OBJECTVALUE5',
+    'ObjectTileGrip 0 0 8 0',
+    'IfEqual 10 CHECKRESULT 0',
+    'Equal OBJECTVALUE6 OBJECTDIRECTION',
+    'endif',
+    'Equal OBJECTVALUE5 OBJECTYPOS',
+    'Equal TEMP2 OBJECTVALUE4',
+    'Equal TEMP3 OBJECTVALUE5',
+    'Equal TEMP4 OBJECTVALUE6',
+    'CallFunction {C}',
+    'IfEqual 12 CHECKRESULT 1',
+    'Equal OBJECTVALUE6 OBJECTDIRECTION',
+    'endif',
+    'IfNotEqual 14 OBJECTSTATE 4',
+    'Equal OBJECTXPOS OBJECTVALUE8',
+    'Equal OBJECTYPOS OBJECTVALUE9',
+    'ObjectTileGrip 0 0 8 0',
+    'IfEqual 16 CHECKRESULT 0',
+    'Equal OBJECTVALUE10 OBJECTDIRECTION',
+    'endif',
+    'Equal OBJECTVALUE9 OBJECTYPOS',
+    'Equal TEMP2 OBJECTVALUE8',
+    'Equal TEMP3 OBJECTVALUE9',
+    'Equal TEMP4 OBJECTVALUE10',
+    'CallFunction {C}',
+    'IfEqual 18 CHECKRESULT 1',
+    'Equal OBJECTVALUE10 OBJECTDIRECTION',
+    'endif',
+    'endif',
+    'Equal OBJECTXPOS TEMP0',
+    'Equal OBJECTYPOS TEMP1',
+    'return',
+    'JT 0 IfNotEqual @15 @18',
+    'JT 2 IfEqual @4 @5',
+    'JT 11 IfEqual @13 @14',
+    'JT 21 IfEqual @23 @24',
+    'JT 29 IfEqual @31 @32',
+    'JT 35 IfEqual @37 @38',
+    'JT 43 IfEqual @45 @46',
+    'JT 46 IfNotEqual @61 @62',
+    'JT 50 IfEqual @52 @53',
+    'JT 58 IfEqual @60 @61',
+]
+
+CATERK_FN_C_SIG = [  # Caterkiller's stage function {C} (Zone06's 101): the slope check under (TEMP2, TEMP3)
+    'ShR TEMP2 16',
+    'ShR TEMP3 16',
+    'Add TEMP3 8',
+    'Get16x16TileInfo TEMP5 TEMP2 TEMP3 6',
+    'Get16x16TileInfo TEMP6 TEMP2 TEMP3 1',
+    'switch 0 TEMP6',
+    'And TEMP5 255',
+    'break',
+    'And TEMP5 255',
+    'Equal TEMP6 TEMP5',
+    'Equal TEMP5 256',
+    'Sub TEMP5 TEMP6',
+    'And TEMP5 255',
+    'break',
+    'ShR TEMP5 24',
+    'Add TEMP5 128',
+    'Equal TEMP6 TEMP5',
+    'Equal TEMP5 256',
+    'Sub TEMP5 TEMP6',
+    'And TEMP5 255',
+    'break',
+    'ShR TEMP5 24',
+    'Add TEMP5 128',
+    'And TEMP5 255',
+    'break',
+    'endswitch',
+    'Equal CHECKRESULT 0',
+    'IfEqual 8 TEMP4 0',
+    'IfLower 10 TEMP5 128',
+    'IfGreater 12 TEMP5 24',
+    'Equal CHECKRESULT 1',
+    'endif',
+    'endif',
+    'else',
+    'IfGreater 14 TEMP5 128',
+    'IfLower 16 TEMP5 232',
+    'Equal CHECKRESULT 1',
+    'endif',
+    'endif',
+    'endif',
+    'return',
+    'JT 5 switch 0 3 @25 @26 @6 @8 @14 @21',
+    'JT 27 IfEqual @34 @40',
+    'JT 28 IfLower @32 @33',
+    'JT 29 IfGreater @31 @32',
+    'JT 34 IfGreater @38 @39',
+    'JT 35 IfLower @37 @38',
+]
+
+CATERK_FN_R_SIG = [  # Caterkiller's stage function {R} (Zone06's 97): the reset
+    'Equal OBJECTVALUE12[1,1,0] OBJECTXPOS[1,1,0]',
+    'Equal OBJECTVALUE13[1,1,0] OBJECTYPOS[1,1,0]',
+    'Equal TEMP0 OBJECTXPOS[1,1,0]',
+    'Equal TEMP1 786432',
+    'IfEqual 0 TEMP7 1',
+    'FlipSign TEMP1',
+    'endif',
+    'Equal OBJECTDIRECTION[1,1,0] TEMP7',
+    'Equal OBJECTFRAME[1,1,0] 0',
+    'Add TEMP0 TEMP1',
+    'Equal OBJECTVALUE0[1,1,0] TEMP0',
+    'Equal OBJECTVALUE1[1,1,0] OBJECTYPOS[1,1,0]',
+    'Equal OBJECTVALUE2[1,1,0] OBJECTDIRECTION[1,1,0]',
+    'Equal OBJECTVALUE3[1,1,0] 0',
+    'Add TEMP0 TEMP1',
+    'Equal OBJECTVALUE4[1,1,0] TEMP0',
+    'Equal OBJECTVALUE5[1,1,0] OBJECTYPOS[1,1,0]',
+    'Equal OBJECTVALUE6[1,1,0] OBJECTDIRECTION[1,1,0]',
+    'Equal OBJECTVALUE7[1,1,0] 0',
+    'Add TEMP0 TEMP1',
+    'Equal OBJECTVALUE8[1,1,0] TEMP0',
+    'Equal OBJECTVALUE9[1,1,0] OBJECTYPOS[1,1,0]',
+    'Equal OBJECTVALUE10[1,1,0] OBJECTDIRECTION[1,1,0]',
+    'Equal OBJECTVALUE11[1,1,0] 0',
+    'Equal OBJECTSTATE[1,1,0] 0',
+    'Equal OBJECTVALUE14[1,1,0] 0',
+    'return',
+    'JT 4 IfEqual @6 @7',
+]
+
+# (object, kind, script functions the native runs in the VM[, sub: 0 update (default), 1 draw])
+S1ZONE_OBJS = (('Door', 0, ()), ('Door Horizontal', 1, ()), ('Invisible Block', 2, (51,)), ('Belt Activation', 3, ()),
+               ('Belt Activation', 4, (), 1), ('Belt Platform', 5, (131,)), ('Spin Platform', 6, ()),
+               ('Vanish Platform', 7, ()), ('Caterkiller', 8, (45, 46)), ('Caterkiller', 15, (), 1))
+
+CATERK_DRAW_SIG = [  # Caterkiller's draw sub (Zones 02 / 03 / 06), with its jump-table entries (V4-120)
+    'IfLower 0 OBJECTSTATE 5',
+    'Equal TEMP0 OBJECTDIRECTION',
+    'Equal OBJECTDIRECTION OBJECTVALUE10',
+    'Equal TEMP1 OBJECTVALUE11',
+    'ShR TEMP1 1',
+    'Add TEMP1 16',
+    'DrawSpriteFX TEMP1 5 OBJECTVALUE8 OBJECTVALUE9',
+    'Equal OBJECTDIRECTION OBJECTVALUE6',
+    'Equal TEMP1 OBJECTVALUE7',
+    'ShR TEMP1 1',
+    'Add TEMP1 16',
+    'DrawSpriteFX TEMP1 5 OBJECTVALUE4 OBJECTVALUE5',
+    'Equal OBJECTDIRECTION OBJECTVALUE2',
+    'Equal TEMP1 OBJECTVALUE3',
+    'ShR TEMP1 1',
+    'Add TEMP1 16',
+    'DrawSpriteFX TEMP1 5 OBJECTVALUE0 OBJECTVALUE1',
+    'Equal OBJECTDIRECTION TEMP0',
+    'Equal TEMP0 OBJECTFRAME',
+    'ShR TEMP0 1',
+    'CheckEqual OBJECTSTATE 2',
+    'Equal TEMP1 CHECKRESULT',
+    'CheckEqual OBJECTSTATE 3',
+    'Or TEMP1 CHECKRESULT',
+    'IfEqual 2 TEMP1 1',
+    'Add TEMP0 8',
+    'endif',
+    'DrawSpriteFX TEMP0 5 OBJECTXPOS OBJECTYPOS',
+    'else',
+    'DrawSpriteFX OBJECTFRAME 5 OBJECTXPOS OBJECTYPOS',
+    'endif',
+    'End',
+    'JT 0 IfLower @29 @31',
+    'JT 24 IfEqual @26 @27',
+]
+
+
+def template_ids(got, sig, ids=None):
+    """The {X} placeholders' values when listing `got` equals template `sig` (each {X} one number, the same everywhere
+    and agreeing with `ids`), else None."""
+    import re
+    ids = dict(ids or {})
+    if len(got) != len(sig):
+        return None
+    for g, t in zip(got, sig):
+        if '{' not in t:
+            if g != t:
+                return None
+            continue
+        parts = re.split(r'\{(\w)\}', t)  # text, key, text, key, ..., text
+        keys = parts[1::2]
+        m = re.fullmatch('(-?\\d+)'.join(re.escape(x) for x in parts[0::2]), g)
+        if not m:
+            return None
+        for k, v in zip(keys, m.groups()):
+            if ids.setdefault(k, int(v)) != int(v):
+                return None
+    return ids
+
+
+def caterkiller_ids(path, got, ctype):
+    """Caterkiller's function ids {A, B, C, R, T} when its update `got` and the stage functions it calls match CATERK_SIG
+    and CATERK_FN_*_SIG (the native inlines them) and its temp objects are of its own type `ctype`, else None."""
+    names, vars_ = bs.tables(3)
+    ids = template_ids(got, CATERK_SIG)
+    if ids is None:
+        return None
+    code, jt = bs.full_code(path)[:2]
+    own = bs.load(path)
+    if len(code) > len(own[0]):
+        jt = bs.load(os.path.join(os.path.dirname(path), 'GlobalCode.bin'))[1] + jt
+    fns = own[4]
+
+    def fn_listing(f):
+        ptr, jptr = fns[f]
+        ins = instructions(code, ptr, names, vars_)
+        return listing(ins) + jump_listing(ins, jt, ptr, jptr)
+    for key, sig in (('A', CATERK_FN_A_SIG), ('B', CATERK_FN_B_SIG), ('R', CATERK_FN_R_SIG), ('C', CATERK_FN_C_SIG)):
+        if key not in ids or ids[key] >= len(fns):
+            return None
+        ids = template_ids(fn_listing(ids[key]), sig, ids)
+        if ids is None:
+            return None
+    return ids if ids.get('T') == ctype else None
+
 
 
 def patch_s1_zone_objs(bcdir):
@@ -8843,6 +9513,8 @@ def patch_s1_zone_objs(bcdir):
     fn = [n for n, _ in names]
     op, end = fn.index('PS1S1ZoneObj'), fn.index('End')
     data = os.path.join(bcdir, '..', 'Data')
+    sigs = {**S1ZONEOBJ_SIGS, 3: BELTACT_SIG, 4: BELTACT_DRAW_SIG, 5: S1BELTPLAT_SIG, 6: S1SPINPLAT_SIG,
+            7: S1VANISHPLAT_SIG, 15: CATERK_DRAW_SIG}  # 8 (Caterkiller): caterkiller_ids
     done, already = [], []
     for f in sorted(os.listdir(bcdir)):
         folder = f[:-4]
@@ -8851,7 +9523,8 @@ def patch_s1_zone_objs(bcdir):
         objs = object_sheets.stage_config(data, folder)[2]
         path = os.path.join(bcdir, f)
         changed = False
-        for name, kind, calls in S1ZONE_OBJS:
+        for name, kind, calls, *rest in S1ZONE_OBJS:
+            sub = rest[0] if rest else 0
             if name not in objs:
                 continue
             raw = open(path, 'rb').read()
@@ -8860,11 +9533,16 @@ def patch_s1_zone_objs(bcdir):
             full = bs.full_code(path)[0]
             base = len(full) - len(own)
             k = objs.index(name)
-            ptr = bs.load(path)[2][k][0]
+            ptr = bs.load(path)[2][k][sub]
             if full[ptr] == op:
                 already.append('%s %s' % (folder, name))
                 continue
-            if sub_listing(path, k, 0, names, vars_)[3] != S1ZONEOBJ_SIGS[kind]:
+            got = sub_listing(path, k, sub, names, vars_)[3]
+            if kind == 8:  # Caterkiller: its stage functions' ids differ per file
+                gtypes = len(object_sheets.game_config(data)[0]) if object_sheets.stage_config(data, folder)[0] else 0
+                if caterkiller_ids(path, got, gtypes + k + 1) is None:
+                    continue
+            elif got != sigs[kind]:
                 continue
             if calls and callable_from_native(path, calls):
                 continue
@@ -11113,6 +11791,16 @@ ARZWATER_DRAW_SIG = [  # Aquatic Ruin's Water draw sub (Zone03) (V4-046)
 ]
 
 
+CLOUD_SIG = [  # the Ending's Cloud update sub (V4-121)
+    'Equal OBJECTXVEL LOCAL[1,0,63679]',
+    'Mul OBJECTXVEL OBJECTDRAWORDER',
+    'Add OBJECTXPOS OBJECTXVEL',
+    'Equal OBJECTYVEL LOCAL[1,0,63680]',
+    'Mul OBJECTYVEL OBJECTDRAWORDER',
+    'Add OBJECTYPOS OBJECTYVEL',
+    'End',
+]
+
 CYLINDER_SIG = [  # Metropolis' Cylinder update sub (Zone09), with its jump-table entries (V4-111)
     'Equal OBJECTPRIORITY 1',
     'Equal TEMP2 0',
@@ -11384,6 +12072,61 @@ def patch_draw_subs(bcdir):
     return '%d draw subs native (%s)' % (total, ', '.join('%s %d' % kv for kv in sorted(done.items())))
 
 
+def patch_s1_draw_subs(bcdir):
+    """Sonic 1 (V4-120): every object's draw sub that is exactly one of DRAW_SUB_OPS -> PS1S1ZoneObj 9 + its PS1DrawSub
+    kind / End (Sonic 2's opcodes are not in Sonic 1's table). The four words need a sub of at least four up to its End."""
+    names, vars_ = bs.tables(3)
+    fn = [n for n, _ in names]
+    op, end = fn.index('PS1S1ZoneObj'), fn.index('End')
+    kinds = {k: 9 + i for i, k in enumerate(DRAW_SUB_OPS)}  # PS1DrawSub's kinds in DRAW_SUB_OPS order
+    sys.path.insert(0, os.path.join(HERE, '..', 'atlas'))
+    import object_sheets
+    data = os.path.join(bcdir, '..', 'Data')
+    done, short = collections.Counter(), 0
+
+    def patch_file(path, objs, base):
+        nonlocal short
+        raw = open(path, 'rb').read()
+        own, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        full = bs.full_code(path)[0] if base else own
+        subs = bs.load(path)[2]
+        n = 0
+        for i, _ in enumerate(objs):
+            ptr = subs[i][1]
+            if ptr < base or ptr >= base + len(own) or full[ptr] == op:
+                continue
+            ins = instructions(full, ptr, names, vars_)
+            key = tuple(listing(ins))
+            if key not in kinds:
+                continue
+            if ins[-1][0] - ptr + 1 < 4:
+                short += 1
+                continue
+            own[ptr - base:ptr - base + 4] = [op, 2, kinds[key], end]
+            done[DRAW_SUB_OPS[key]] += 1
+            n += 1
+        if n:
+            open(path, 'wb').write(encode(own) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == own
+        return n
+
+    total = patch_file(os.path.join(bcdir, 'GlobalCode.bin'), global_objects(bcdir), 0)
+    glen = len(bs.load(os.path.join(bcdir, 'GlobalCode.bin'))[0])
+    for f in sorted(os.listdir(bcdir)):
+        folder = f[:-4]
+        if not f.endswith('.bin') or folder == 'GlobalCode':
+            continue
+        if not os.path.exists(os.path.join(data, 'Stages', folder, 'StageConfig.bin')):
+            continue
+        path = os.path.join(bcdir, f)
+        _, _, objs = object_sheets.stage_config(data, folder)
+        base = glen if len(bs.full_code(path)[0]) > len(bs.load(path)[0]) else 0
+        total += patch_file(path, objs, base)
+    return '%d draw subs PS1S1ZoneObj (%s)%s' % (total, ', '.join('%s %d' % kv for kv in sorted(done.items())),
+                                               ' (%d too short)' % short if short else '')
+
+
 TITLECARD_DRAW_SIG = [  # GlobalCode's Title Card draw sub, with its jump-table entries (V4-115; patch_title_card)
     'Equal TEMP2 SCREENXCENTER',
     'Sub TEMP2 160',
@@ -11542,6 +12285,7 @@ def s1_patches():
             ('springs', patch_s1_springs),
             ('lzsetup', patch_s1_lzsetup),
             ('zoneobjs', patch_s1_zone_objs),
+            ('drawsubs', patch_s1_draw_subs),  # after zoneobjs: a sub already native is left as it is
             ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG_S1, 'PS1StageSetup', with_jumps=True,
                                                       calls=(71, 51))),
             ('ssring', lambda d: patch_stage_sub(d, 'Ring', 0, SSRING_SIG_S1, 'PS1SSRing', with_jumps=True)),
@@ -11608,6 +12352,7 @@ def main():
                      ('arzdraw', lambda d: patch_stage_sub(d, 'ARZ Setup', 1, ARZSETUP_DRAW_SIG, 'PS1ARZSetupDraw', with_jumps=True)
                       + ', ' + patch_stage_sub(d, 'Water', 1, ARZWATER_DRAW_SIG, 'PS1ARZWaterDraw', with_jumps=True)),
                      ('cylinder', lambda d: patch_stage_sub(d, 'Cylinder', 0, CYLINDER_SIG, 'PS1Cylinder', with_jumps=True)),
+                     ('cloud', lambda d: patch_stage_sub(d, 'Cloud', 0, CLOUD_SIG, 'PS1Cloud')),
                      ('drawsubs', patch_draw_subs),
                      ('titlecard', patch_title_card),
                      ('stagesetup', lambda d: patch_global_sub(d, 'Stage Setup', 0, STAGESETUP_SIG, 'PS1StageSetup',

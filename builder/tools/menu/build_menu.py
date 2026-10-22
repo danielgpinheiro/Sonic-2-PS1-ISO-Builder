@@ -325,9 +325,11 @@ def main():
         ('PORTRAIT_TAILS', ps.crop((256, 0, 512, 256)).resize((140, 140), Image.LANCZOS), 8),
         ('PORTRAIT_KNUX', ps.crop((0, 256, 256, 512)).resize((140, 140), Image.LANCZOS), 8),
         ('PLATE', ps.crop((256, 256, 512, 512)).resize((150, 150), Image.LANCZOS), 4),
-        ('ICON_SONIC', sym.crop((0, 160, 48, 256)).resize((14, 28), Image.NEAREST), 4),
-        ('ICON_TAILS', sym.crop((48, 160, 112, 256)).resize((19, 28), Image.NEAREST), 4),
-        ('ICON_KNUX', sym.crop((112, 160, 192, 256)).resize((23, 28), Image.NEAREST), 4),
+        # SubMenuButton's save-file icons: its RenderImage rects (sprX, sprY, sprW, sprH) at its scale 0.3 x 0.35
+        # (V4-118: the earlier cuts at x 0 / 48 / 112 took the neighbour's columns and lost their own)
+        ('ICON_SONIC', sym.crop((0, 170, 56, 256)).resize((17, 30), Image.NEAREST), 4),
+        ('ICON_TAILS', sym.crop((58, 170, 126, 256)).resize((20, 30), Image.NEAREST), 4),
+        ('ICON_KNUX', sym.crop((130, 170, 188, 256)).resize((17, 30), Image.NEAREST), 4),
         ('EMERALD_ON', sym.crop((192, 0, 256, 64)).resize((10, 10), Image.LANCZOS), 4),
         ('EMERALD_OFF', sym.crop((128, 0, 192, 64)).resize((10, 10), Image.LANCZOS), 4),
         ('LOCK', sym.crop((192, 64, 256, 128)).resize((16, 16), Image.LANCZOS), 4),

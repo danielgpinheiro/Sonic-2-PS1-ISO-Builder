@@ -975,6 +975,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1DrawFlip0", 0),
     FunctionInfo("PS1DrawInkFrame", 0),
     FunctionInfo("PS1Cylinder", 0),
+    FunctionInfo("PS1Cloud", 0),
 #endif
 #endif
 };
@@ -1581,6 +1582,7 @@ enum ScrFunc {
     FUNC_PS1DRAWFLIP0,
     FUNC_PS1DRAWINKFRAME,
     FUNC_PS1CYLINDER,
+    FUNC_PS1CLOUD,
 #endif
 #endif
     FUNC_MAX_CNT
@@ -6005,6 +6007,19 @@ __attribute__((optimize("Os"))) static void PS1DrawSub(int kind)
 // V4-111). Natively, one statement per script instruction; switch cases as the jump table lists them. Patched in only on
 // CYLINDER_SIG.
 static int PS1CollisionTop(Entity &e); // below (VAR_OBJECTCOLLISIONTOP's getter)
+// The Ending's Cloud (V4-121): drifts by the sky speed LOCAL[63679] / [63680] times its draw order (its parallax layer);
+// 7 VM instructions, but up to 128 clouds a frame (~260 hblanks with their ProcessScript entries, the ending 40 % slow
+// and its music over before the scene). Natively, one statement per script instruction. Patched in only on CLOUD_SIG.
+static void PS1CloudUpdate()
+{
+    Entity &me = objectEntityList[objectEntityPos];
+    me.xvel    = scriptCode[63679];
+    me.xvel *= me.drawOrder;
+    me.xpos += me.xvel;
+    me.yvel = scriptCode[63680];
+    me.yvel *= me.drawOrder;
+    me.ypos += me.yvel;
+}
 __attribute__((optimize("Os"))) static void PS1CylinderUpdate()
 {
     int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
@@ -8247,6 +8262,593 @@ static void PS1SSObjUpdate(int kind)
 #endif
 
 #if PS1_GAME == 1
+// Scrap Brain's natives (V4-120) are size-optimised as a block (lambdas included: -Os attributes skip them).
+#pragma GCC push_options
+#pragma GCC optimize("Os")
+// GetTableValue dst index table (FUNC_GETTABLEVALUE's body): dst keeps its value when the index is out of the table.
+static inline void PS1GetTableValue(int &dst, int index, int table)
+{
+    if (index >= 0 && index < scriptCode[table])
+        dst = scriptCode[table + index + 1];
+}
+
+// DrawSpriteFX frame FX_FLIP x y (FUNC_DRAWSPRITEFX's FX_FLIP case) for entity e: the VM's four direction cases, any
+// other direction drawn as FLIP_NONE.
+static void PS1S1DrawFlipAt(const Entity &e, int frame, int x, int y)
+{
+    const ObjectScript *o = &objectScriptList[e.type];
+    const SpriteFrame *f  = &scriptFrames[o->frameListOffset + frame];
+    int sx = (x >> 16) - xScrollOffset, sy = (y >> 16) - yScrollOffset;
+    int dir = e.direction <= FLIP_XY ? e.direction : FLIP_NONE;
+    DrawSpriteFlipped((dir & FLIP_X) ? sx - f->width - f->pivotX : sx + f->pivotX, (dir & FLIP_Y) ? sy - f->height - f->pivotY : sy + f->pivotY,
+                      f->width, f->height, f->sprX, f->sprY, dir, o->spriteSheetID);
+}
+
+// Get16x16TileInfo (FUNC_GET16X16TILEINFO's body) for TILEINFO_DIRECTION / TILEINFO_ANGLEA.
+static int PS1Get16x16TileInfo(int x, int y, int info)
+{
+    int pos = stageLayouts[0].tiles[(x >> 7) + ((y >> 7) << 8)] << 6;
+    pos += ((x & 0x7F) >> 4) + 8 * ((y & 0x7F) >> 4);
+    int index = tiles128x128.tileIndex[pos];
+    switch (info) {
+        case TILEINFO_DIRECTION: return tiles128x128.direction[pos];
+        case TILEINFO_ANGLEA: return collisionMasks[0].angles[index];
+        default: return 0;
+    }
+}
+
+// A Caterkiller piece (function A's CreateTempObject TypeName[Caterkiller] 0 x y, then its fields): xvel by direction,
+// yvel -4, the given direction, frame 16, state 5, priority 7 (the head's own frame and state are set by the caller after).
+static Entity *PS1S1CaterPiece(int type, int x, int y, int dir, int xvelDir0, int xvelElse)
+{
+    PS1CreateTempObject(type, 0, x, y);
+    Entity *n = &PS1_OBJ(scriptEng.arrayPosition[8]);
+    if (dir == 0)
+        n->xvel = xvelDir0;
+    else
+        n->xvel = xvelElse;
+    n->yvel      = -262144;
+    n->direction = dir;
+    n->frame     = 16;
+    n->state     = 5;
+    n->priority  = 7;
+    return n;
+}
+
+// Sonic 1's Caterkiller (Marble, Spring Yard, Scrap Brain; V4-120): a badnik of a head and three body pieces crawling
+// in four states, its touch boxes tested piece by piece every frame (~210 VM instructions a frame, ~38 hblanks; state 0
+// sets PRIORITY_ACTIVE, so one stays active once seen). Natively: the update sub one statement per script instruction,
+// its stage functions inlined (CATERK_FNS: A = the piece touch boxes and the break-up, B = the pieces' floor grip, C =
+// B's slope check, R = the reset; their ids differ per stage file), GlobalCode functions 45 (the badnik hit) and 46
+// (the player hurt) in the VM. The pieces it breaks into are temp objects of its own type. Patched in only on
+// CATERK_SIG with every function's listing (patch_s1_caterkiller).
+static void PS1S1Caterkiller()
+{
+    int *t = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr                = scriptEng.checkResult;
+    int self               = objectEntityPos;
+    Entity &me             = PS1_OBJ(self);
+    int *v                 = me.values;
+    TypeGroupList &players = objectTypeGroupList[256];
+    auto touches = [&]() { // function A
+        t[7] = 0;
+        t[5] = me.xpos;
+        t[6] = me.ypos;
+        for (int loop = 0; loop < players.listSize; ++loop) {
+            ap[6]     = players.entityRefs[loop];
+            Entity &p = PS1_OBJ(ap[6]);
+            TouchCollision(&me, -8, -8, 8, 8, &p, p.values[40], p.values[38], p.values[41], p.values[39]);
+            if (cr == 1) {
+                PS1CallScriptFunction(45, 1);
+            }
+            else {
+                me.xpos = v[0];
+                me.ypos = v[1];
+                TouchCollision(&me, -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                if (cr == 1) {
+                    PS1CallScriptFunction(46, 1);
+                    t[7] = 1;
+                }
+                else {
+                    me.xpos = v[4];
+                    me.ypos = v[5];
+                    TouchCollision(&me, -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                    if (cr == 1) {
+                        PS1CallScriptFunction(46, 1);
+                        t[7] = 1;
+                    }
+                    else {
+                        me.xpos = v[8];
+                        me.ypos = v[9];
+                        TouchCollision(&me, -8, -8, 8, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                        if (cr == 1) {
+                            PS1CallScriptFunction(46, 1);
+                            t[7] = 1;
+                        }
+                    }
+                }
+            }
+            me.xpos = t[5];
+            me.ypos = t[6];
+        }
+        if (t[7] == 1) {
+            int type = me.type; // CreateTempObject TypeName[Caterkiller]
+            t[0]     = me.frame;
+            t[0] <<= 15;
+            me.ypos -= t[0];
+            Entity *n = PS1S1CaterPiece(type, me.xpos, me.ypos, me.direction, -131072, 131072);
+            n->frame  = me.frame;
+            n->frame &= 8;
+            n->state    = 5;
+            n->priority = 7;
+            PS1S1CaterPiece(type, v[0], v[1], v[2], -98304, 98304);
+            t[0] = v[7];
+            t[0] <<= 15;
+            v[5] -= t[0];
+            me.frame -= t[0];
+            PS1S1CaterPiece(type, v[4], v[5], v[6], 98304, -98304);
+            PS1S1CaterPiece(type, v[8], v[9], v[10], 131072, -131072);
+            PS1ResetObjectEntity(self, 0, 0, me.xpos, me.ypos);
+        }
+    };
+    auto slope = [&]() { // function C: is the tile under (t2, t3) too steep for direction t4?
+        t[2] >>= 16;
+        t[3] >>= 16;
+        t[3] += 8;
+        t[5] = PS1Get16x16TileInfo(t[2], t[3], TILEINFO_ANGLEA);
+        t[6] = PS1Get16x16TileInfo(t[2], t[3], TILEINFO_DIRECTION);
+        switch (t[6]) {
+            case 0: t[5] &= 255; break;
+            case 1:
+                t[5] &= 255;
+                t[6] = t[5];
+                t[5] = 256;
+                t[5] -= t[6];
+                t[5] &= 255;
+                break;
+            case 2:
+                t[5] >>= 24;
+                t[5] += 128;
+                t[6] = t[5];
+                t[5] = 256;
+                t[5] -= t[6];
+                t[5] &= 255;
+                break;
+            case 3:
+                t[5] >>= 24;
+                t[5] += 128;
+                t[5] &= 255;
+                break;
+            default: break;
+        }
+        cr = 0;
+        if (t[4] == 0) {
+            if (t[5] < 128) {
+                if (t[5] > 24)
+                    cr = 1;
+            }
+        }
+        else {
+            if (t[5] > 128) {
+                if (t[5] < 232)
+                    cr = 1;
+            }
+        }
+    };
+    auto grip = [&]() { // function B
+        if (me.state != 2) {
+            ObjectFloorGrip(0, 8, 0);
+            if (cr == 0)
+                me.direction ^= 1;
+            t[0] = me.xpos;
+            t[1] = me.ypos;
+            t[2] = t[0];
+            t[3] = t[1];
+            t[4] = me.direction;
+            slope();
+            if (cr == 1)
+                me.direction ^= 1;
+        }
+        else {
+            t[0] = me.xpos;
+            t[1] = me.ypos;
+        }
+        for (int k = 0; k < 3; ++k) { // the body pieces: values 0-2, 4-6, 8-10 (the last not in state 4)
+            int *pc = v + 4 * k;
+            if (k == 2 && me.state == 4)
+                break;
+            me.xpos = pc[0];
+            me.ypos = pc[1];
+            ObjectFloorGrip(0, 8, 0);
+            if (cr == 0)
+                pc[2] = me.direction;
+            pc[1] = me.ypos;
+            t[2]  = pc[0];
+            t[3]  = pc[1];
+            t[4]  = pc[2];
+            slope();
+            if (cr == 1)
+                pc[2] = me.direction;
+        }
+        me.xpos = t[0];
+        me.ypos = t[1];
+    };
+    switch (me.state) {
+        case 0: me.priority = 1; [[fallthrough]];
+        case 1:
+            if (v[14] == 0) {
+                v[14] = 15;
+                me.state++;
+                me.frame = -1;
+                v[7]     = -1;
+            }
+            else {
+                v[14]--;
+                touches();
+                break;
+            }
+            [[fallthrough]];
+        case 2:
+            if (v[14] == 0) {
+                v[14] = 7;
+                me.state++;
+            }
+            else {
+                v[14]--;
+                if (v[2] == 0)
+                    v[0] -= 16384;
+                else
+                    v[0] += 16384;
+                if (v[6] == 0)
+                    v[4] -= 32768;
+                else
+                    v[4] += 32768;
+                if (v[10] == 0)
+                    v[8] -= 49152;
+                else
+                    v[8] += 49152;
+                me.frame++;
+                v[7]++;
+                grip();
+                touches();
+            }
+            break;
+        case 3:
+            if (v[14] == 0) {
+                v[14] = 15;
+                me.state++;
+                me.frame = 16;
+                v[7]     = 16;
+            }
+            else {
+                v[14]--;
+                touches();
+                break;
+            }
+            [[fallthrough]];
+        case 4:
+            if (v[14] == 0) {
+                v[14]    = 7;
+                me.state = 1;
+            }
+            else {
+                v[14]--;
+                if (me.direction == 0)
+                    me.xpos -= 49152;
+                else
+                    me.xpos += 49152;
+                if (v[2] == 0)
+                    v[0] -= 32768;
+                else
+                    v[0] += 32768;
+                if (v[6] == 0)
+                    v[4] -= 16384;
+                else
+                    v[4] += 16384;
+                me.frame--;
+                v[7]--;
+                grip();
+                touches();
+            }
+            break;
+        case 5: // a piece of a broken Caterkiller
+            me.xpos += me.xvel;
+            me.ypos += me.yvel;
+            me.yvel += 14336;
+            if (me.yvel > 0) {
+                ObjectFloorCollision(0, 8, 0);
+                if (cr == 1)
+                    me.yvel = -262144;
+            }
+            for (int loop = 0; loop < players.listSize; ++loop) {
+                ap[6]     = players.entityRefs[loop];
+                Entity &p = PS1_OBJ(ap[6]);
+                TouchCollision(&me, -8, -8, 8, 8, &p, p.values[40], p.values[38], p.values[41], p.values[39]);
+                if (cr == 1) {
+                    if (me.frame < 16)
+                        PS1CallScriptFunction(45, 1);
+                    else
+                        PS1CallScriptFunction(46, 1);
+                }
+            }
+            if (PS1ObjectOutOfBounds(&me) == 1)
+                me.type = 0;
+            break;
+        default: break;
+    }
+    if (me.state != 5) {
+        if (PS1ObjectOutOfBounds(&me) == 1) {
+            t[0]    = me.xpos;
+            t[1]    = me.ypos;
+            me.xpos = v[12];
+            me.ypos = v[13];
+            if (PS1ObjectOutOfBounds(&me) == 1) {
+                ap[0]     = self;
+                t[7]      = PS1_OBJ(ap[0]).propertyValue;
+                Entity &e = PS1_OBJ(ap[0]); // function R
+                e.values[12] = e.xpos;
+                e.values[13] = e.ypos;
+                t[0]         = e.xpos;
+                t[1]         = 786432;
+                if (t[7] == 1)
+                    t[1] = -t[1];
+                e.direction = t[7];
+                e.frame     = 0;
+                t[0] += t[1];
+                for (int k = 0; k < 3; ++k) {
+                    e.values[4 * k]     = t[0];
+                    e.values[4 * k + 1] = e.ypos;
+                    e.values[4 * k + 2] = e.direction;
+                    e.values[4 * k + 3] = 0;
+                    if (k < 2)
+                        t[0] += t[1];
+                }
+                e.state      = 0;
+                e.values[14] = 0;
+            }
+            else {
+                me.xpos = t[0];
+                me.ypos = t[1];
+            }
+        }
+    }
+}
+
+// PS1S1ZoneObj's kinds 3-8 and 15 (V4-120; S1ZONEOBJ_SIGS, CATERK_SIG, CATERK_DRAW_SIG): Scrap Brain's Belt Activation
+// (update 3, draw 4), Belt Platform 5 (stage function 131, the next leg, in the VM), Spin Platform 6 and Vanish Platform 7
+// (the shared timer LOCAL[52319]), Caterkiller 8 (update) and 15 (draw). One statement per script instruction.
+static void PS1S1ZoneObjSbz(int kind)
+{
+    int *t   = scriptEng.temp, *ap = scriptEng.arrayPosition;
+    int &cr  = scriptEng.checkResult;
+    int self = objectEntityPos;
+    TypeGroupList &players = objectTypeGroupList[256];
+    auto me = [&]() -> Entity & { return PS1_OBJ(self); };
+    auto L  = [](int pos) { return (int)scriptCode[pos]; };
+    switch (kind) {
+        case 3: // Belt Activation (Scrap Brain; Sonic 2's Metropolis script, BELTACT_SIG): its belt's platforms active
+            ap[0] = me().values[1];
+            while (ap[0] < me().values[0]) {
+                PS1_OBJ(ap[0]).priority = 1;
+                ap[0]++;
+            }
+            break;
+        case 4: // Belt Activation's draw sub (BELTACT_DRAW_SIG)
+            ap[0] = me().values[1];
+            while (ap[0] < me().values[0]) {
+                if (stageMode == 1)
+                    PS1_OBJ(ap[0]).priority = 5;
+                else
+                    PS1_OBJ(ap[0]).priority = 1;
+                ap[0]++;
+            }
+            break;
+        case 5: { // Belt Platform (Scrap Brain): at a waypoint stage function 131 (the next leg's velocity) runs in the VM
+            Entity &e = me();
+            int *v    = e.values;
+            t[0]      = e.xpos;
+            t[1]      = e.ypos;
+            t[0] >>= 16;
+            t[1] >>= 16;
+            if (t[0] == v[0]) {
+                if (t[1] == v[1]) {
+                    v[5] += 2;
+                    if (v[5] > v[6])
+                        v[5] = 0;
+                    ap[0] = self;
+                    PS1CallScriptFunction(131, 0);
+                }
+            }
+            if (e.rotation != 0) {
+                e.rotation++;
+                e.rotation &= 15;
+            }
+            else {
+                if (v[5] > 2)
+                    e.rotation++;
+            }
+            t[0]  = e.rotation;
+            int d = e.direction;
+            PS1GetTableValue(d, t[0], 69194);
+            e.direction = d;
+            t[0] &= 7;
+            d = e.frame;
+            PS1GetTableValue(d, t[0], 69185);
+            e.frame = d;
+            t[0]    = e.xpos;
+            t[0] &= -65536;
+            t[1] = e.ypos;
+            t[1] &= -65536;
+            t[2] = e.xpos;
+            t[2] += e.xvel;
+            t[3] = e.ypos;
+            t[3] += e.yvel;
+            v[2] = t[2];
+            v[2] &= -65536;
+            v[2] -= t[0];
+            v[3] = t[3];
+            v[3] &= -65536;
+            v[3] -= t[1];
+            if (e.rotation == 0) {
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6]     = players.entityRefs[loop];
+                    Entity &p = PS1_OBJ(ap[6]);
+                    BoxCollision(&e, -16, -7, 16, 7, &p, 65536, 65536, 65536, 65536);
+                    if (cr == 1) {
+                        p.xpos += v[2];
+                        p.ypos += v[3];
+                    }
+                }
+            }
+            e.xpos = t[2];
+            e.ypos = t[3];
+            break;
+        }
+        case 6: { // Spin Platform (Scrap Brain): starts on the shared timer LOCAL[52319], then stays always active
+            Entity &e = me();
+            int *v    = e.values;
+            t[0]      = L(52319);
+            t[0] &= v[2];
+            if (t[0] == 0) {
+                e.state    = 1;
+                e.priority = 1;
+            }
+            t[0] = 0;
+            if (e.state != 0) {
+                v[0]--;
+                if (v[0] < 0) {
+                    t[0]    = 1;
+                    v[0]    = v[1];
+                    e.state = 0;
+                }
+            }
+            if (e.rotation != 0) {
+                e.rotation++;
+                e.rotation &= 31;
+            }
+            else {
+                if (t[0] != 0)
+                    e.rotation++;
+            }
+            t[0] = e.rotation;
+            t[0] >>= 1;
+            int d = e.direction;
+            PS1GetTableValue(d, t[0], 72096);
+            e.direction = d;
+            t[0] &= 7;
+            d = e.frame;
+            PS1GetTableValue(d, t[0], 72087);
+            e.frame = d;
+            if (e.rotation == 0) {
+                for (int loop = 0; loop < players.listSize; ++loop) {
+                    ap[6] = players.entityRefs[loop];
+                    BoxCollision(&e, -16, -7, 16, 7, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                }
+            }
+            break;
+        }
+        case 7: { // Vanish Platform (Scrap Brain): appears / vanishes on the shared timer, a platform while bit 1 of its frame
+            Entity &e = me();
+            int *v    = e.values;
+            if (e.state == 0) {
+                t[0] = L(52319);
+                t[0] -= v[2];
+                t[0] &= v[3];
+                if (t[0] == 0) {
+                    e.state    = 1;
+                    e.priority = 1;
+                }
+            }
+            if (e.state != 0) {
+                v[0]--;
+                if (v[0] < 0) {
+                    if (e.animation == 0)
+                        v[0] = v[1];
+                    else
+                        v[0] = 127;
+                    e.animation ^= 1;
+                }
+                if (e.animation == 0) {
+                    if (e.frame < 3) {
+                        e.animationTimer++;
+                        if (e.animationTimer == 8) {
+                            e.animationTimer = 0;
+                            e.frame++;
+                        }
+                    }
+                }
+                else {
+                    if (e.frame > 0) {
+                        e.animationTimer++;
+                        if (e.animationTimer == 8) {
+                            e.animationTimer = 0;
+                            e.frame--;
+                        }
+                    }
+                }
+                t[0] = (e.frame & (1 << 1)) >> 1;
+                if (t[0] != 0) {
+                    for (int loop = 0; loop < players.listSize; ++loop) {
+                        ap[6] = players.entityRefs[loop];
+                        PlatformCollision(&e, -16, -8, 16, 8, &PS1_OBJ(ap[6]), 65536, 65536, 65536, 65536);
+                    }
+                }
+            }
+            t[0] = cameraXPos;
+            t[0] -= e.xpos >> 16;
+            t[0] = abs(t[0]);
+            t[0] -= 128;
+            if (t[0] > SCREEN_CENTERX) {
+                e.state          = 0;
+                v[0]             = 127;
+                e.priority       = 3;
+                e.animation      = 0;
+                e.frame          = 0;
+                e.animationTimer = 0;
+            }
+            break;
+        }
+        case 8: PS1S1Caterkiller(); break;
+        case 15: { // Caterkiller's draw sub (CATERK_DRAW_SIG): the body pieces back to front, then the head
+            Entity &e = me();
+            int *v    = e.values;
+            if (e.state < 5) {
+                t[0]        = e.direction;
+                e.direction = v[10];
+                t[1]        = v[11];
+                t[1] >>= 1;
+                t[1] += 16;
+                PS1S1DrawFlipAt(e, t[1], v[8], v[9]);
+                e.direction = v[6];
+                t[1]        = v[7];
+                t[1] >>= 1;
+                t[1] += 16;
+                PS1S1DrawFlipAt(e, t[1], v[4], v[5]);
+                e.direction = v[2];
+                t[1]        = v[3];
+                t[1] >>= 1;
+                t[1] += 16;
+                PS1S1DrawFlipAt(e, t[1], v[0], v[1]);
+                e.direction = t[0];
+                t[0]        = e.frame;
+                t[0] >>= 1;
+                cr   = e.state == 2;
+                t[1] = cr;
+                cr   = e.state == 3;
+                t[1] |= cr;
+                if (t[1] == 1)
+                    t[0] += 8;
+                PS1S1DrawFlipAt(e, t[0], e.xpos, e.ypos);
+            }
+            else {
+                PS1S1DrawFlipAt(e, e.frame, e.xpos, e.ypos);
+            }
+            break;
+        }
+    }
+}
+#pragma GCC pop_options
+
 // Sonic 1's zone objects' update subs (docs/37 phase 2b; S1ZONEOBJ_SIGS, the operand says which), one statement per
 // instruction, the players' loops over group 256 (ARRAYPOS6):
 // 0 Labyrinth's Door: its state switch (0 wait for the switch -- entity + 1's value 0 -- , 1 rise, 2 open, 3 wait for
@@ -8419,6 +9021,20 @@ static void PS1S1ZoneObj(int kind)
                 default: break;
             }
             break;
+        case 3: // Scrap Brain's objects and Caterkiller (V4-120): PS1S1ZoneObjSbz
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+        case 8:
+        case 15: PS1S1ZoneObjSbz(kind); break;
+        // 9-14: one-sprite draw subs (Sonic 2's DRAW_SUB_OPS, patch_s1_draw_subs; V4-120): PS1DrawSub's kinds 0-5
+        case 9:
+        case 10:
+        case 11:
+        case 12:
+        case 13:
+        case 14: PS1DrawSub(kind - 9); break;
     }
 }
 #endif
@@ -13471,6 +14087,7 @@ static bool PS1S2FastSub(int p)
         case FUNC_PS1DRAWFLIP0: scriptText[0] = '\0'; PS1DrawSub(4); break;
         case FUNC_PS1DRAWINKFRAME: scriptText[0] = '\0'; PS1DrawSub(5); break;
         case FUNC_PS1CYLINDER: scriptText[0] = '\0'; PS1CylinderUpdate(); break;
+        case FUNC_PS1CLOUD: scriptText[0] = '\0'; PS1CloudUpdate(); break;
         case FUNC_PS1HALFPIPE: scriptText[0] = '\0'; PS1HalfpipeUpdate(); break;
         case FUNC_PS1SPECIALSETUPUPDATE: scriptText[0] = '\0'; PS1SpecialSetupUpdate(); break;
         case FUNC_PS1SPECIALBGDRAW: scriptText[0] = '\0'; PS1SpecialBGDraw(&objectScriptList[objectEntityList[objectEntityPos].type]); break;
@@ -15957,6 +16574,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptEvent)
             case FUNC_PS1CYLINDER: // a whole sub: End follows
                 opcodeSize = 0;
                 PS1CylinderUpdate();
+                break;
+            case FUNC_PS1CLOUD: // a whole sub: End follows
+                opcodeSize = 0;
+                PS1CloudUpdate();
                 break;
             case FUNC_PS1HALFPIPE:
                 opcodeSize = 0;

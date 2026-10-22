@@ -3,6 +3,20 @@
 Updates to the Sonic 2 PS1 ISO Builder, newest first. To get an update, rebuild your disc image with the new
 version of the builder (same steps as in the [README](README.md)).
 
+## The ending at full speed, whole save-select icons (October 2026)
+
+- **The ending runs at full speed**, so its music no longer ends before the scene does. Up to 128 clouds drift past the
+  Tornado, and running each one through the game's script interpreter slowed the scene to about 70 % speed (with Knuckles
+  and Tails especially). The clouds now run as native code; they move exactly as before.
+- **The save select shows Tails' and Knuckles' icons whole.** The icons were cut from the menu artwork at the wrong
+  places: Tails lost the right side of his picture and showed a bit of Sonic on the left, Knuckles showed a bit of Tails
+  and sat off-centre. They are now cut where the mobile game draws them, at its size, and Sonic & Tails files show the two
+  of them as on mobile (Sonic in front).
+- Checked with the port's automated tests (the ending frame by frame against the previous version, the save select
+  against checked screenshots), in PCSX-Redux and DuckStation.
+- The title screen shows the new build, `V B74CCE2B` (the RSDKv4-ps1 port's commit `b74cce2`). The image's SHA-256
+  changes (the new value is in the README's Output section).
+
 ## Aquatic Ruin at full speed, the title card's text in the clear (October 2026)
 
 - **Aquatic Ruin runs at 60 frames a second**, as Sonic and as Sonic & Tails, also where leaves fly, a Grounder bursts
